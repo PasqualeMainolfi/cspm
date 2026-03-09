@@ -1,0 +1,19 @@
+[package]
+name = ""
+version = ""
+description = ""
+repository = ""
+authors = []
+license = ""
+include = []
+
+# main entry point
+[main]
+src = "src" # source folder
+csd = ""
+orc = ""
+sco = ""
+udo = ""
+
+[dependencies]
+name = "version"

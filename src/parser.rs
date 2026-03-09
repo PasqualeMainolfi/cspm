@@ -1,0 +1,346 @@
+use std::{ collections::{ HashMap, HashSet }, fs, path };
+use anyhow::Result;
+use serde::{ Deserialize, Serialize };
+use sha2::{ Sha256, Digest };
+use reqwest;
+use flate2::read::GzDecoder;
+use tar::Archive;
+use std::process;
+use walkdir::WalkDir;
+
+pub trait ManageToml {
+    fn open_toml(mpath: &path::Path) -> Result<Self>
+    where Self: Sized;
+    fn write_toml(mpath: &path::Path, mtoml: &Self) -> Result<()>;
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct LockFile {
+    pub version: u32,
+
+    #[serde(rename = "package", skip_serializing_if = "Vec::is_empty")]
+    pub package: Vec<LockChild>
+}
+
+impl ManageToml for LockFile {
+    fn open_toml(mpath: &path::Path) -> Result<Self>
+    where Self: Sized {
+        let mstring = fs::read_to_string(mpath)?;
+        let mtoml: LockFile = toml::from_str(&mstring)?;
+        Ok(mtoml)
+    }
+
+    fn write_toml(mpath: &path::Path, mtoml: &Self) -> Result<()> {
+        let mtoml= toml::to_string_pretty::<LockFile>(&mtoml)?;
+        std::fs::write(mpath, mtoml)?;
+        Ok(())
+    }
+}
+
+#[derive(Serialize, Deserialize, Default)]
+pub struct LockChild {
+    pub name: String,
+    pub version: String,
+
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub checksum: String,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<String>
+}
+
+#[derive(Serialize, Deserialize, Default)]
+pub struct MainEntry {
+    #[serde(default)]
+    pub src: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub csd: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orc: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sco: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udo: Option<String>
+}
+
+impl MainEntry {
+    pub fn is_empty(&self) -> bool {
+        self.src.is_empty() && self.csd.is_none() && self.orc.is_none() && self.sco.is_none() && self.udo.is_none()
+    }
+
+    pub fn get_entry_point(&self) -> Result<(String, String)> {
+        if self.is_empty() {
+            return Err(anyhow::anyhow!("[RUN ERROR] Main entry point is empty. Please specify the script entry point (.csd or .osc/.sco)"));
+        }
+
+        if self.csd.is_some() && self.orc.is_some() && self.sco.is_some() {
+            return Err(anyhow::anyhow!("[RUN ERROR] Many entry point specified"));
+        }
+
+        if self.csd.is_none() && (self.orc.is_none() || self.sco.is_none()) {
+            return Err(anyhow::anyhow!("[RUN WARNING] Missing .orc or .sco entry point"));
+        }
+
+        if self.csd.is_some() && (self.sco.is_some() || self.orc.is_some()) {
+            println!("[RUN WARNING] Run .csd entry point. Specified .sco or .osc script will be ignored");
+            return Ok((self.csd.clone().unwrap_or(String::new()), String::new()))
+        }
+
+        if self.orc.is_some() && self.sco.is_some() {
+            let entry_point_orc = self.orc.clone().unwrap_or(String::new());
+            let entry_point_sco = self.sco.clone().unwrap_or(String::new());
+            println!("[INFO] Run {} and {} entry point", entry_point_orc, entry_point_sco);
+            return Ok((entry_point_orc, entry_point_sco))
+        }
+
+        if self.csd.is_some() {
+            let entry_point_csd = self.csd.clone().unwrap_or(String::new());
+            println!("[INFO] Run {} entry point", entry_point_csd);
+            return Ok((entry_point_csd, String::new()))
+        }
+
+        Err(anyhow::anyhow!("[RUN ERROR] Something went wrong while runnning csound script"))
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Manifest {
+    #[serde(rename = "package")]
+    pub package: MainPackage,
+
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub dependencies: HashMap<String, String>,
+
+    #[serde(default, skip_serializing_if = "MainEntry::is_empty")]
+    pub main: MainEntry
+}
+
+impl ManageToml for Manifest {
+    fn open_toml(mpath: &path::Path) -> Result<Self>
+    where Self: Sized {
+        let mstring = fs::read_to_string(mpath)?;
+        let mtoml: Manifest = toml::from_str(&mstring)?;
+        Ok(mtoml)
+    }
+
+    fn write_toml(mpath: &path::Path, mtoml: &Self) -> Result<()> {
+        let mtoml = toml::to_string_pretty::<Manifest>(&mtoml)?;
+        std::fs::write(mpath, mtoml)?;
+        Ok(())
+    }
+}
+
+#[derive(Serialize, Deserialize, Default)]
+pub struct MainPackage {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub repository: String,
+    pub authors: Vec<String>,
+    pub license: String,
+    pub include: Vec<String>
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct CacheMeta {
+    pub source: String,
+    pub checksum: String
+}
+
+pub enum RegistryMode {
+    CacheMode,
+    ModulesMode
+}
+
+pub enum RegistryData {
+    CacheRegistry(HashMap<String, HashSet<String>>),
+    ModulesRegistry(HashMap<String, String>)
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct RemoteRegistryIndex {
+    pub version: Vec<String>,
+    pub authors: Vec<String>,
+    pub description: String
+}
+
+pub fn computer_checksum(path_to_module: &path::Path) -> Result<String> {
+    let mut hasher = Sha256::new();
+
+    // deterministic
+    let mut contents: Vec<_> = WalkDir::new(path_to_module)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_file())
+        .collect();
+
+    contents.sort_by(|a, b| a.path().cmp(b.path()));
+
+    for entry in contents {
+        if let Ok(rel_path) = entry.path().strip_prefix(path_to_module) {
+            hasher.update(rel_path.to_string_lossy().as_bytes());
+        }
+        let inside = fs::read(entry.path())?;
+        hasher.update(inside);
+    }
+
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+pub fn download_package(registry: &str, pname: &str, version: &str, cache_path: &path::Path, dest_path: &path::Path) -> Result<()> {
+    let url = format!("{}/{}-{}.tar.gz", registry, pname, version); // should be tar.gz
+    println!("[INFO] Download package {} from {}", pname, registry);
+
+    let mut response = reqwest::blocking::get(&url)?;
+    let temp_file_path = cache_path.join(format!("{}_temp.tar.gz", pname));
+
+    {
+        let mut temp_file = std::fs::File::create(&temp_file_path)?;
+        std::io::copy(&mut response, &mut temp_file)?;
+    }
+
+    println!("[INFO] Unpack package");
+    let tar_gz = std::fs::File::open(&temp_file_path)?;
+    let decoder = GzDecoder::new(&tar_gz);
+    let mut archive = Archive::new(decoder);
+    archive.unpack(cache_path.join(dest_path))?;
+    println!("[INFO] Remove downloaded temp file");
+    std::fs::remove_file(&temp_file_path)?;
+    Ok(())
+}
+
+pub fn resolve_module_version(url: &str, pname: &str, version: Option<String>) -> Result<String> {
+    println!("[INFO] Check for last available version");
+    let response = reqwest::blocking::get(url)?;
+    let indexes: HashMap<String, RemoteRegistryIndex> = response.json()?;
+
+    if let Some(index) = indexes.get(pname) {
+        let versions = &index.version;
+        if let Some(passed_version) = version {
+            if versions.contains(&passed_version) {
+                return Ok(passed_version.to_string())
+            } else {
+                return Err(anyhow::anyhow!("[ERROR] Version {} for module {} does not exists", pname, passed_version))
+            }
+        } else {
+            if let Some(latest) = versions.last() {
+                return Ok(latest.clone())
+            }
+        }
+    }
+
+    Err(anyhow::anyhow!("[ERROR] Package {} not found in registry", pname).into())
+}
+
+pub fn read_internal_registry(mod_registry_path: &path::Path, registry_mode: RegistryMode) -> Result<RegistryData> {
+    match registry_mode {
+        RegistryMode::CacheMode => {
+            let mindex: HashMap<String, HashSet<String>> = if mod_registry_path.is_file() {
+                let mstring = fs::read_to_string(mod_registry_path)?;
+                serde_json::from_str(&mstring)?
+            } else {
+                HashMap::new()
+            };
+            return Ok(RegistryData::CacheRegistry(mindex))
+        }
+        RegistryMode::ModulesMode => {
+            let mindex: HashMap<String, String> = if mod_registry_path.is_file() {
+                let mstring = fs::read_to_string(mod_registry_path)?;
+                serde_json::from_str(&mstring)?
+            } else {
+                HashMap::new()
+            };
+            return Ok(RegistryData::ModulesRegistry(mindex))
+        }
+    }
+}
+
+pub fn write_internal_registry(mod_registry_path: &path::Path, mindex: RegistryData) -> Result<()> {
+    let mindex_string = match mindex {
+        RegistryData::CacheRegistry(map) => {
+            serde_json::to_string_pretty::<HashMap<String, HashSet<String>>>(&map)?
+        },
+        RegistryData::ModulesRegistry(map) => {
+            serde_json::to_string_pretty::<HashMap<String, String>>(&map)?
+        }
+    };
+    fs::write(mod_registry_path, mindex_string)?;
+    Ok(())
+}
+
+pub fn parse_module_name(package_name: &str) -> (String, String) {
+    let mut package_iter = package_name.split('@');
+    let name = package_iter.next().unwrap_or("");
+    let version = package_iter.next().unwrap_or("");
+    (name.to_string(), version.to_string())
+}
+
+pub fn remove_entry_from_registry(entry_name: String, registry: &mut RegistryData) {
+    let (current_name, current_version) = parse_module_name(&entry_name);
+    match registry {
+        RegistryData::CacheRegistry(map) => {
+            let mut to_delete = false;
+            if let Some(ref mut vers) = map.get_mut(&current_name) {
+                if vers.contains(&current_version) { vers.remove(&current_version); }
+                to_delete = vers.is_empty();
+            }
+            if to_delete { map.remove(&current_name); }
+        },
+        RegistryData::ModulesRegistry(map) => {
+            let mut to_delete = false;
+            if let Some(vers) = map.get_mut(&current_name) {
+                if vers == &current_version { to_delete = true; }
+            }
+            if to_delete { map.remove(&current_name); }
+        }
+    }
+}
+
+pub fn add_entry_to_registry(entry_name: &str, entry_version: &str, registry: &mut RegistryData) {
+    match registry {
+        RegistryData::CacheRegistry(map) => {
+            map
+                .entry(entry_name.to_string())
+                .and_modify(|v| { v.insert(entry_version.to_string()); })
+                .or_insert_with(|| {
+                    let mut hset = HashSet::new();
+                    hset.insert(entry_version.to_string());
+                    hset
+                });
+        },
+        RegistryData::ModulesRegistry(map) => {
+            map
+                .entry(entry_name.to_string())
+                .and_modify(|v| *v = entry_version.to_string())
+                .or_insert_with(|| entry_version.to_string());
+        }
+    }
+}
+
+pub fn run_csound_script(entry_point: &(String, String), cs_options: &Option<Vec<String>>) -> Result<()> {
+    let (file1, file2) = entry_point;
+    let mut c = process::Command::new("csound");
+    c.arg(file1);
+    if !file2.is_empty() { c.arg(file2); }
+    if let Some(opts) = cs_options {
+        if !opts.is_empty() {
+            for flag in opts.iter() {
+                c.arg(flag);
+            }
+        }
+    }
+
+    let status = c.status()?;
+    if !status.success() {
+        return Err(anyhow::anyhow!("[RUN ERROR] Csound exited with non-zero status: {}", status));
+    }
+
+    Ok(())
+}
