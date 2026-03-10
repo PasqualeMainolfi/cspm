@@ -26,7 +26,9 @@ use crate::parser::{
     resolve_module_version,
     write_internal_registry,
     run_csound_script,
-    parse_module_name
+    run_risset,
+    parse_module_name,
+    check_manifest_deps
 };
 
 use crate::paths::{
@@ -44,11 +46,14 @@ use crate::paths::{
     CS_CACHE_INDEX,
     CS_MODULES_INDEX,
     CSPM_MANIFEST,
+    ProjectRoots,
     get_root,
-    ProjectRoots
+    create_info_file
 };
 
-pub fn create_project(p_name: String, module_flag: bool) -> Result<()> {
+// create global commands without manifest: install, uninstall, sync
+
+pub fn create_project(p_name: String, module_flag: bool, global: bool) -> Result<()> {
     let mut dir_builder = fs::DirBuilder::new();
     dir_builder.recursive(true);
     let pfolder = format!("./{}", p_name);
@@ -57,6 +62,9 @@ pub fn create_project(p_name: String, module_flag: bool) -> Result<()> {
     // create src folder
     let p_src = p.join(DEFAULT_SRC_FOLDER);
     dir_builder.create(p_src.clone())?;
+
+    // create project info file
+    create_info_file(&p, global)?;
 
     // main script (entry point)
     let main_ext = if !module_flag { ".csd" } else { ".udo" };
@@ -80,7 +88,7 @@ pub fn create_project(p_name: String, module_flag: bool) -> Result<()> {
         }
     }
 
-    let mut manifest_init = Manifest { package: mft, dependencies: HashMap::new(), main: main_entry};
+    let mut manifest_init = Manifest { package: mft, main: main_entry, ..Default::default()};
     manifest_init.package.include.push("src".to_string()); // include src folder
     Manifest::write_toml(&manifest_file, &manifest_init)?;
 
@@ -91,8 +99,10 @@ pub fn create_project(p_name: String, module_flag: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn add_package(name: &str, version: Option<String>, global: bool, force: bool) -> Result<()> {
-    let roots = ProjectRoots::new(global)?;
+pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<()> { // use also globally without project
+    let mut roots = ProjectRoots::new()?;
+    roots.set_modules_root()?;
+
     let lpath = roots.project_root.join(LOCK_FILE);
 
     let cache_folder = roots.cache_root.join(CS_MODULES_CACHE_FOLDER);
@@ -108,7 +118,7 @@ pub fn add_package(name: &str, version: Option<String>, global: bool, force: boo
 
     if let Some(_) = manifest_toml.dependencies.get(name) {
         println!("[INFO] Remove module {} previously added...", name);
-        remove_package(&name, force, global)?;
+        remove_package(&name, force)?;
     }
 
     // load lockfile
@@ -249,6 +259,10 @@ fn resolve_dependencies(
             .iter()
             .map(|(d, v)| format!("{}@{}", d, v))
             .collect(),
+        plugins: mod_manifest.plugins
+            .iter()
+            .map(|(d, v)| format!("{}@{}", d, v))
+            .collect()
     });
 
     println!("[RESOLVE_DEPS::INFO] Resolving dependencies...");
@@ -268,8 +282,10 @@ fn resolve_dependencies(
     Ok(())
 }
 
-pub fn remove_package(pname: &str, force: bool, global: bool) -> Result<()> {
-    let roots = ProjectRoots::new(global)?;
+pub fn remove_package(pname: &str, force: bool) -> Result<()> {
+    let mut roots = ProjectRoots::new()?;
+    roots.set_modules_root()?;
+
     let lpath = roots.project_root.join(LOCK_FILE);
     let manifest_path = roots.project_root.join(MANIFEST_FILE);
     let cs_modules_path = roots.modules_root.join(CS_MODULES_FOLDER);
@@ -385,7 +401,6 @@ fn remove_helper(
                 fs::remove_dir_all(&pfolder)?;
                 println!("[REMOVE_MOD::INFO] Update project's modules registry");
                 remove_entry_from_registry(current.clone(), mindex);
-
                 let (pkg_name, pkg_version) = parse_module_name(&current);
                 lockfile.package.retain(|p| !(p.name == pkg_name && p.version == pkg_version));
             }
@@ -395,7 +410,7 @@ fn remove_helper(
     Ok(())
 }
 
-pub fn update_package(modules: Option<Vec<String>>, global: bool, force: bool) -> Result<()> {
+pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
     let prj_root = get_root(false, "project-folder")?;
     let manifest = Manifest::open_toml(&prj_root.join(MANIFEST_FILE))?;
     let installed_modules = manifest.dependencies;
@@ -433,10 +448,10 @@ pub fn update_package(modules: Option<Vec<String>>, global: bool, force: bool) -
         }
 
         println!("[UPDATE_MOD::INFO] Remove module {}@{}", &pname, &pversion);
-        remove_package(&pname, force, global)?;
+        remove_package(&pname, force)?;
 
         println!("[UPDATE_MOD::INFO] Update module {} to {}", &pname, &latest_version);
-        add_package(&pname, Some(latest_version), global, force)?;
+        add_package(&pname, Some(latest_version), force)?;
 
         println!("[UPDATE_MOD::INFO] Module {} is up to date", &pname);
     }
@@ -444,13 +459,9 @@ pub fn update_package(modules: Option<Vec<String>>, global: bool, force: bool) -
     Ok(())
 }
 
-pub fn manage_cache(clean: bool, prune: bool, list: bool, global: bool) -> Result<()> {
-    let roots = ProjectRoots::new(global)?;
-
-    let manifest: Manifest = match Manifest::open_toml(&roots.project_root.join(MANIFEST_FILE)) {
-        Ok(mf) => mf,
-        Err(e) => return Err(anyhow::anyhow!("[CACHE::ERROR] Cspm.toml file not found: {}", e))
-    };
+pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
+    let mut roots = ProjectRoots::new()?;
+    roots.set_modules_root()?;
 
     let cache_folder = roots.cache_root.join(CS_MODULES_CACHE_FOLDER);
 
@@ -460,9 +471,6 @@ pub fn manage_cache(clean: bool, prune: bool, list: bool, global: bool) -> Resul
     }
 
     let cache_index_path = cache_folder.join(CS_CACHE_INDEX);
-    let modules_index_path = roots.modules_root
-        .join(CS_MODULES_FOLDER)
-        .join(CS_MODULES_INDEX);
 
     if clean {
         let mut cindex = read_internal_registry(&cache_index_path, RegistryMode::CacheMode)?;
@@ -482,75 +490,6 @@ pub fn manage_cache(clean: bool, prune: bool, list: bool, global: bool) -> Resul
 
         println!("[CACHE::INFO] Update cache registry");
         write_internal_registry(&cache_index_path, cindex)?;
-
-        return Ok(())
-    }
-
-    let lockfile = LockFile::open_toml(&roots.project_root.join(LOCK_FILE));
-    let lockfile: LockFile = match lockfile {
-        Ok(lf) => lf,
-        Err(e) => {
-            return Err(anyhow::anyhow!("[CACHE::ERROR] Empty or corrupted Cspm.lock file: {}", e))
-        }
-    };
-
-    // cache pruning
-    if prune {
-        let mut used: HashSet<String> = HashSet::new();
-        let mut tail = VecDeque::new();
-        for (dep, ver) in manifest.dependencies.iter() {
-            let d = format!("{}@{}", dep, ver).to_string();
-            tail.push_back(d);
-        }
-
-        while let Some(current) = tail.pop_front() {
-            if !used.insert(current.clone()) { continue; }
-
-            if let Some(pkg) = lockfile.package
-                .iter()
-                .find(|p| format!("{}@{}", p.name, p.version) == current)
-            {
-                for dlock in &pkg.dependencies {
-                    tail.push_back(dlock.to_string());
-                }
-            }
-        }
-
-        // use cache index
-        let cache_index_path = cache_folder.join(CS_CACHE_INDEX);
-        let mut cindex = read_internal_registry(&cache_index_path, RegistryMode::CacheMode)?;
-        let mut mindex = read_internal_registry(&modules_index_path, RegistryMode::ModulesMode)?;
-
-        println!("[CACHE::INFO] Check dependencies");
-        for entry in fs::read_dir(cache_folder)? {
-            let entry = entry?;
-
-            if !entry.file_type()?.is_dir() { continue; }
-
-            let pkg_path = entry.path();
-            let pkg_name = entry.file_name().to_string_lossy().to_string();
-            if !used.contains(&pkg_name) {
-                println!("[CACHE::INFO] Remove orphan module: {}", pkg_name);
-                fs::remove_dir_all(&pkg_path)?;
-
-                println!("[CACHE::INFO] Update cache registry");
-                remove_entry_from_registry(pkg_name.clone(), &mut cindex);
-
-                // remove from modules
-                let (parsed_name, _) = parse_module_name(&pkg_name);
-                let pfolder = roots.modules_root.join(CS_MODULES_FOLDER).join(parsed_name);
-                if pfolder.exists() {
-                    fs::remove_dir_all(&pfolder)?;
-                    println!("[CACHE::INFO] Update module's registry");
-                    remove_entry_from_registry(pkg_name, &mut mindex);
-                }
-            }
-        }
-
-        println!("[CACHE::INFO] Write cache registry");
-        write_internal_registry(&cache_index_path, cindex)?;
-        println!("[CACHE::INFO] Write module's registry");
-        write_internal_registry(&modules_index_path, mindex)?;
 
         return Ok(())
     }
@@ -578,8 +517,10 @@ pub fn manage_cache(clean: bool, prune: bool, list: bool, global: bool) -> Resul
     Ok(())
 }
 
-pub fn sync_environment(global: bool) -> Result<()> {
-    let roots = ProjectRoots::new(global)?;
+pub fn sync_project() -> Result<()> {
+    let mut roots = ProjectRoots::new()?;
+    roots.set_modules_root()?;
+
     let manifest_toml: Manifest = Manifest::open_toml(&roots.project_root.join(MANIFEST_FILE))?;
 
     let response = reqwest::blocking::get(REGISTRY_INDEX)?;
@@ -628,9 +569,12 @@ pub fn sync_environment(global: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn build_from_manifest(global: bool) -> Result<()> {
-    let roots = ProjectRoots::new(global)?;
+pub fn build_from_manifest(global: bool) -> Result<()> { // add plugins installation from manifest when build. If not global in meta or meta does not exists spcify
+    let mut roots = ProjectRoots::new()?;
     let lpath = roots.project_root.join(LOCK_FILE);
+
+    create_info_file(&roots.project_root, global)?;
+    roots.set_modules_root()?;
 
     let cache_folder = roots.cache_root.join(CS_MODULES_CACHE_FOLDER);
     let cache_index = cache_folder.join(CS_CACHE_INDEX);
@@ -693,8 +637,11 @@ pub fn build_from_manifest(global: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn build_from_lock(global: bool) -> Result<()> {
-    let roots = ProjectRoots::new(global)?;
+pub fn build_from_lock(global: bool) -> Result<()> { // add plugins installation from lock when build
+    let mut roots = ProjectRoots::new()?;
+
+    create_info_file(&roots.project_root, global)?;
+    roots.set_modules_root()?;
 
     let mpath = roots.project_root.join(MANIFEST_FILE);
     let lpath = roots.project_root.join(LOCK_FILE);
@@ -766,27 +713,41 @@ pub fn build_from_lock(global: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn reinstall_module(modules: Vec<String>, global: bool, force: bool) -> Result<()> {
+pub fn reinstall_module(modules: Vec<String>, force: bool) -> Result<()> {
     for module in modules.iter() {
         println!("[REINSTALL::INFO] Remove module {}", module);
-        remove_package(&module, force, global)?;
+        remove_package(&module, force)?;
         println!("[REINSTALL::INFO] Reinstall module {}", module);
         let (mname, mversion) = parse_module_name(module);
         let version = if !mversion.is_empty() { Some(mversion) } else { None };
-        add_package(&mname, version, global, force)?;
+        add_package(&mname, version, force)?;
     }
 
     Ok(())
 }
 
-pub fn run_project(csoptions: &Option<Vec<String>>) -> Result<()> {
-    let prj_root = get_root(false, "project-folder")?;
-    let manifest: Manifest = Manifest::open_toml(&prj_root.join(MANIFEST_FILE))?;
+pub fn run_project(csoptions: &Vec<String>) -> Result<()> {
+    let mut roots = ProjectRoots::new()?;
+    roots.set_modules_root()?;
+
+    let manifest: Manifest = Manifest::open_toml(&roots.project_root.join(MANIFEST_FILE))?;
     let entry_point: (String, String) = manifest.main.get_entry_point()?;
+
+    // check deps
+    println!("[RUN::INFO] Check dependencies status globally installed"); // check also plugins
+    check_manifest_deps(&roots.modules_root.join(CS_MODULES_INDEX), &manifest)?;
+    println!("[RUN::INFO] Dependencies status: the project is in a healthy state");
 
     // run csound
     println!("[RUN::INFO] Running csound script");
     run_csound_script(&entry_point, csoptions)?;
+    Ok(())
+}
+
+pub fn install_plugins(rstoptions: &Vec<String>) -> Result<()> {
+    // run risset
+    println!("[RISSET::INFO] Run plugins installation");
+    run_risset(rstoptions)?;
     Ok(())
 }
 
@@ -872,4 +833,17 @@ pub fn search_package(module_name: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub fn validate_project() -> Result<()> {
+    println!("[VALIDATE::INFO] Check project status...");
+    // check manifest and repair. modules declared in manifest wins on modules installed in csmodules
+    // iterate modules print errors
+    // delete entire cs_modules
+    // delete lock
+    // builf from manifest
+    // update module's registry
+    // update lock
+    println!("[VALIDATE::INFO] The project is in healthy status");
+    todo!()
 }

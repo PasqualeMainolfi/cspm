@@ -8,6 +8,12 @@ use tar::Archive;
 use std::process;
 use walkdir::WalkDir;
 
+
+#[derive(Serialize, Deserialize)]
+pub struct ProjectInfo {
+    pub global_modules: bool
+}
+
 pub trait ManageToml {
     fn open_toml(mpath: &path::Path) -> Result<Self>
     where Self: Sized;
@@ -49,7 +55,10 @@ pub struct LockChild {
     pub checksum: String,
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub dependencies: Vec<String>
+    pub dependencies: Vec<String>,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugins: Vec<String>
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -77,19 +86,19 @@ impl MainEntry {
 
     pub fn get_entry_point(&self) -> Result<(String, String)> {
         if self.is_empty() {
-            return Err(anyhow::anyhow!("[RUN ERROR] Main entry point is empty. Please specify the script entry point (.csd or .osc/.sco)"));
+            return Err(anyhow::anyhow!("[RUN::ERROR] Main entry point is empty. Please specify the script entry point (.csd or .osc/.sco)"));
         }
 
         if self.csd.is_some() && self.orc.is_some() && self.sco.is_some() {
-            return Err(anyhow::anyhow!("[RUN ERROR] Many entry point specified"));
+            return Err(anyhow::anyhow!("[RUN::ERROR] Many entry point specified"));
         }
 
         if self.csd.is_none() && (self.orc.is_none() || self.sco.is_none()) {
-            return Err(anyhow::anyhow!("[RUN WARNING] Missing .orc or .sco entry point"));
+            return Err(anyhow::anyhow!("[RUN::WARNING] Missing .orc or .sco entry point"));
         }
 
         if self.csd.is_some() && (self.sco.is_some() || self.orc.is_some()) {
-            println!("[RUN WARNING] Run .csd entry point. Specified .sco or .osc script will be ignored");
+            println!("[RUN::WARNING] Run .csd entry point. Specified .sco or .osc script will be ignored");
             return Ok((self.csd.clone().unwrap_or(String::new()), String::new()))
         }
 
@@ -106,20 +115,23 @@ impl MainEntry {
             return Ok((entry_point_csd, String::new()))
         }
 
-        Err(anyhow::anyhow!("[RUN ERROR] Something went wrong while runnning csound script"))
+        Err(anyhow::anyhow!("[RUN::ERROR] Something went wrong while runnning csound script"))
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct Manifest {
     #[serde(rename = "package")]
     pub package: MainPackage,
 
+    #[serde(default, skip_serializing_if = "MainEntry::is_empty")]
+    pub main: MainEntry,
+
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub dependencies: HashMap<String, String>,
 
-    #[serde(default, skip_serializing_if = "MainEntry::is_empty")]
-    pub main: MainEntry
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub plugins: HashMap<String, String>
 }
 
 impl ManageToml for Manifest {
@@ -196,7 +208,7 @@ pub fn computer_checksum(path_to_module: &path::Path) -> Result<String> {
 
 pub fn download_package(registry: &str, pname: &str, version: &str, cache_path: &path::Path, dest_path: &path::Path) -> Result<()> {
     let url = format!("{}/{}-{}.tar.gz", registry, pname, version); // should be tar.gz
-    println!("[INFO] Download package {} from {}", pname, registry);
+    println!("[DOWNLOAD::INFO] Download package {} from {}", pname, registry);
 
     let mut response = reqwest::blocking::get(&url)?;
     let temp_file_path = cache_path.join(format!("{}_temp.tar.gz", pname));
@@ -206,18 +218,18 @@ pub fn download_package(registry: &str, pname: &str, version: &str, cache_path: 
         std::io::copy(&mut response, &mut temp_file)?;
     }
 
-    println!("[INFO] Unpack package");
+    println!("[DOWNLOAD::INFO] Unpack package");
     let tar_gz = std::fs::File::open(&temp_file_path)?;
     let decoder = GzDecoder::new(&tar_gz);
     let mut archive = Archive::new(decoder);
     archive.unpack(cache_path.join(dest_path))?;
-    println!("[INFO] Remove downloaded temp file");
+    println!("[DOWNLOAD::INFO] Remove downloaded temp file");
     std::fs::remove_file(&temp_file_path)?;
     Ok(())
 }
 
 pub fn resolve_module_version(url: &str, pname: &str, version: Option<String>) -> Result<String> {
-    println!("[INFO] Check for last available version");
+    println!("[RESOLVE_DEPS::INFO] Check for last available version");
     let response = reqwest::blocking::get(url)?;
     let indexes: HashMap<String, RemoteRegistryIndex> = response.json()?;
 
@@ -227,7 +239,7 @@ pub fn resolve_module_version(url: &str, pname: &str, version: Option<String>) -
             if versions.contains(&passed_version) {
                 return Ok(passed_version.to_string())
             } else {
-                return Err(anyhow::anyhow!("[ERROR] Version {} for module {} does not exists", pname, passed_version))
+                return Err(anyhow::anyhow!("[RESOLVE_DEPS::ERROR] Version {} for module {} does not exists", pname, passed_version))
             }
         } else {
             if let Some(latest) = versions.last() {
@@ -324,23 +336,68 @@ pub fn add_entry_to_registry(entry_name: &str, entry_version: &str, registry: &m
     }
 }
 
-pub fn run_csound_script(entry_point: &(String, String), cs_options: &Option<Vec<String>>) -> Result<()> {
+pub fn run_csound_script(entry_point: &(String, String), cs_options: &Vec<String>) -> Result<()> {
     let (file1, file2) = entry_point;
     let mut c = process::Command::new("csound");
     c.arg(file1);
     if !file2.is_empty() { c.arg(file2); }
-    if let Some(opts) = cs_options {
-        if !opts.is_empty() {
-            for flag in opts.iter() {
-                c.arg(flag);
-            }
+    if !cs_options.is_empty() {
+        for flag in cs_options.iter() {
+            c.arg(flag);
         }
     }
 
     let status = c.status()?;
     if !status.success() {
-        return Err(anyhow::anyhow!("[RUN ERROR] Csound exited with non-zero status: {}", status));
+        return Err(anyhow::anyhow!("[RUN::ERROR] Csound exited with non-zero status: {}", status));
     }
+
+    Ok(())
+}
+
+pub fn run_risset(rst_options: &Vec<String>) -> Result<()> {
+    let mut c = process::Command::new("risset");
+    if !rst_options.is_empty() {
+        for flag in rst_options.iter() {
+            c.arg(flag);
+        }
+    }
+
+    let status = c.status()?;
+    if !status.success() {
+        return Err(anyhow::anyhow!("[RISSET::ERROR] Plugins installation exited with non-zero status: {}", status));
+    }
+
+    Ok(())
+}
+
+pub fn check_manifest_deps(modules_folder: &path::Path, manifest: &Manifest) -> Result<()> {
+    if let Ok(rdata) = read_internal_registry(modules_folder, RegistryMode::ModulesMode) {
+        match rdata {
+            RegistryData::ModulesRegistry(data) => {
+                for (d, v) in manifest.dependencies.iter() {
+                    if let Some(rvers) = data.get(d) {
+                        if v != rvers {
+                            return Err(anyhow::anyhow!(
+                                "[RUN::ERROR] The module {} declared in the Cspm.toml has a different version {} than the one installed {}",
+                                d, v, rvers
+                            ))
+                        }
+                    } else {
+                        return Err(anyhow::anyhow!(
+                            "[RUN::ERROR] The module {}@{} declared in the Cspm.toml is not installed",
+                            d, v
+                        ))
+                    }
+                }
+            }
+            RegistryData::CacheRegistry(_) => { }
+        }
+    } else {
+        return Err(anyhow::anyhow!(
+            "[RUN::ERROR] Something went wrong reading internal module's regestry"
+        ))
+    };
 
     Ok(())
 }

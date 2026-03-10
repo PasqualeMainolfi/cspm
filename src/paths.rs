@@ -1,6 +1,7 @@
 use directories::ProjectDirs;
 use anyhow::Result;
-use std::{fs, path};
+use std::{ fs, path };
+use crate::parser::ProjectInfo;
 
 // CSPM INTERNAL STRUCTURE:
 // env -> global or local (project)
@@ -27,6 +28,7 @@ pub const LOCK_FILE: &str = "Cspm.lock";
 pub const MANIFEST_FILE: &str = "Cspm.toml";
 pub const DEFAULT_SRC_FOLDER: &str = "src";
 
+pub const PROJECT_INFO_FILE: &str = ".prj.json";
 
 
 pub fn get_root(global: bool, mode: &str) -> Result<path::PathBuf> {
@@ -56,14 +58,29 @@ pub struct ProjectRoots {
 }
 
 impl ProjectRoots {
-    pub fn new(global: bool) -> Result<Self> {
+    pub fn new() -> Result<Self> {
         let project_root = get_root(false, "project-folder")?;
-        let modules_root = get_root(global, "modules-folder")?;
         let cache_root = get_root(true, "cache-folder")?;
         Ok(Self {
             project_root,
-            modules_root,
+            modules_root: path::PathBuf::new(),
             cache_root
         })
     }
+
+    pub fn set_modules_root(&mut self) -> Result<()> {
+        let pinfo = fs::read_to_string(self.project_root.join(PROJECT_INFO_FILE))?;
+        let pinfo_json: ProjectInfo = serde_json::from_str(&pinfo)?;
+        self.modules_root = get_root(pinfo_json.global_modules, "modules-folder")?;
+        Ok(())
+    }
+}
+
+pub fn create_info_file(prj_root: &path::Path, global: bool) -> Result<()> {
+    let prj_info_file = prj_root.join(PROJECT_INFO_FILE);
+    if !prj_info_file.exists() { fs::File::create(&prj_info_file)?; }
+    let prj_info = ProjectInfo { global_modules: global };
+    let prj_json = serde_json::to_string_pretty::<ProjectInfo>(&prj_info)?;
+    fs::write(&prj_info_file, prj_json)?;
+    Ok(())
 }

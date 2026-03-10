@@ -74,11 +74,10 @@ csd = "src/main.csd"
 ## Command reference
 
 ```text
-﬌  ../cspm/target/release/cspm --help
 Hello, from cspm!
 A modern package manager for Csound
 
-Usage: cspm [OPTIONS] <COMMAND>
+Usage: cspm <COMMAND>
 
 Commands:
   init, -i, --init        Create a new Csound project
@@ -91,12 +90,12 @@ Commands:
   build, -b, --build      Build project from manifest or lock file
   publish, --publish      Publish Csound module
   run, --run              Run Csound project
+  validate                Check Cspm.toml file and fixes issues automatically
+  risset                  Install plugins using risset
   search                  Display module info
   version, -v, --version  Display cspm version
   help                    Print this message or the help of the given subcommand(s)
 
 Options:
-  -g, --global  Use global environment
-  -f, --force   Force removal of dependencies
-  -h, --help    Print help
+  -h, --help  Print help
 ```

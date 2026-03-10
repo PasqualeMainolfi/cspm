@@ -17,3 +17,6 @@ udo = ""
 
 [dependencies]
 name = "version"
+
+[plugins]
+name = "version"
