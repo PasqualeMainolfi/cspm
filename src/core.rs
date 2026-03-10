@@ -460,10 +460,8 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
 }
 
 pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
-    let mut roots = ProjectRoots::new()?;
-    roots.set_modules_root()?;
-
-    let cache_folder = roots.cache_root.join(CS_MODULES_CACHE_FOLDER);
+    let root = get_root(true, "cache-folder")?;
+    let cache_folder = root.join(CS_MODULES_CACHE_FOLDER);
 
     if !cache_folder.exists() || !cache_folder.is_dir() {
         println!("[CACHE::INFO] Cache is empty. Nothing to do");

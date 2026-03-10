@@ -37,10 +37,10 @@ pub fn get_root(global: bool, mode: &str) -> Result<path::PathBuf> {
             let pdir = ProjectDirs::from("org", "csound", "cspm").expect("[ERROR] Cannot determine home directory");
             let config_dir = pdir.config_dir();
             if !config_dir.exists() {
-                println!("[INFO] Create global cache folder {}", pdir.data_dir().to_string_lossy());
+                println!("[INFO] Create global cache root {}", pdir.data_dir().to_string_lossy());
                 fs::create_dir_all(config_dir)?;
             }
-            println!("[INFO] Global cache folder {}", pdir.data_dir().to_string_lossy());
+            println!("[INFO] Global cache root {}", pdir.data_dir().to_string_lossy());
             Ok(pdir.data_dir().to_path_buf())
         },
         false => {
