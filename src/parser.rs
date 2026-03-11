@@ -1,12 +1,13 @@
-use std::{ collections::{ HashMap, HashSet }, fs, path };
 use anyhow::Result;
 use serde::{ Deserialize, Serialize };
 use sha2::{ Sha256, Digest };
 use reqwest;
 use flate2::read::GzDecoder;
 use tar::Archive;
-use std::process;
 use walkdir::WalkDir;
+use std::{
+    collections::{ HashMap, HashSet }, fs, path, process
+};
 
 
 #[derive(Serialize, Deserialize)]
@@ -254,7 +255,7 @@ pub fn resolve_module_version(url: &str, pname: &str, version: Option<String>) -
 pub fn read_internal_registry(mod_registry_path: &path::Path, registry_mode: RegistryMode) -> Result<RegistryData> {
     match registry_mode {
         RegistryMode::CacheMode => {
-            let mindex: HashMap<String, HashSet<String>> = if mod_registry_path.is_file() {
+            let mindex: HashMap<String, HashSet<String>> = if mod_registry_path.exists() && mod_registry_path.is_file() {
                 let mstring = fs::read_to_string(mod_registry_path)?;
                 serde_json::from_str(&mstring)?
             } else {
@@ -263,7 +264,7 @@ pub fn read_internal_registry(mod_registry_path: &path::Path, registry_mode: Reg
             return Ok(RegistryData::CacheRegistry(mindex))
         }
         RegistryMode::ModulesMode => {
-            let mindex: HashMap<String, String> = if mod_registry_path.is_file() {
+            let mindex: HashMap<String, String> = if mod_registry_path.exists() && mod_registry_path.is_file() {
                 let mstring = fs::read_to_string(mod_registry_path)?;
                 serde_json::from_str(&mstring)?
             } else {
@@ -334,6 +335,55 @@ pub fn add_entry_to_registry(entry_name: &str, entry_version: &str, registry: &m
                 .or_insert_with(|| entry_version.to_string());
         }
     }
+}
+
+pub fn parse_version(version: &str) -> u32 {
+    let splitted_version: Vec<u32> = version
+        .split('.')
+        .filter_map(|c| c.parse::<u32>().ok())
+        .collect();
+
+    let mut sum = 0;
+    for (i, n) in splitted_version.iter().rev().enumerate() {
+        sum += n.pow(i as u32 + 1);
+    }
+    return sum
+}
+
+pub enum RegistryAnswer {
+    ExistSame,
+    ExistYoung,
+    ExistOld,
+    NotExist
+}
+
+pub fn query_registry(registry: &RegistryData, pkg_name: &str, version: &str) -> RegistryAnswer {
+    match registry {
+        RegistryData::ModulesRegistry(data) => {
+            if let Some(pkg_version) = data.get(pkg_name) {
+                if version.is_empty() {
+                    return RegistryAnswer::ExistOld
+                }
+
+                if version == pkg_version {
+                    return RegistryAnswer::ExistSame
+                } else {
+                    let inside_version = parse_version(pkg_version);
+                    let proposed_version = parse_version(version);
+                    if inside_version > proposed_version {
+                        return RegistryAnswer::ExistYoung
+                    } else {
+                        return RegistryAnswer::ExistOld
+                    }
+                }
+            } else {
+                return RegistryAnswer::NotExist
+            }
+        },
+        RegistryData::CacheRegistry(_) => {}
+    }
+
+    RegistryAnswer::NotExist
 }
 
 pub fn run_csound_script(entry_point: &(String, String), cs_options: &Vec<String>) -> Result<()> {

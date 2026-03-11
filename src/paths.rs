@@ -3,11 +3,6 @@ use anyhow::Result;
 use std::{ fs, path };
 use crate::parser::ProjectInfo;
 
-// CSPM INTERNAL STRUCTURE:
-// env -> global or local (project)
-// cache -> always global (folder that contains a unique json file for cache registry and module folders named pkg_name@pkg_version)
-// module folder -> can be global or local (flag -g)
-
 pub const CSPM_MANIFEST: &str = include_str!("../Cargo.toml");
 pub const CSD_MAIN_TEMPLATE: &str = include_str!("../templates/main_template.csd");
 pub const UDO_MAIN_TEMPLATE: &str = include_str!("../templates/main_template.udo");
@@ -21,8 +16,8 @@ pub const CS_MODULE_META: &str = "meta.json";
 pub const CS_MODULES_FOLDER: &str = "cs_modules";
 pub const CS_MODULES_INDEX: &str = ".cs_modules_index.json";
 
-pub const REGISTRY: &str = ""; // registry
-pub const REGISTRY_INDEX: &str = ""; // package indexes
+pub const REMOTE_REGISTRY: &str = ""; // registry
+pub const REMOTE_REGISTRY_INDEX: &str = ""; // package indexes
 
 pub const LOCK_FILE: &str = "Cspm.lock";
 pub const MANIFEST_FILE: &str = "Cspm.toml";
@@ -30,8 +25,14 @@ pub const DEFAULT_SRC_FOLDER: &str = "src";
 
 pub const PROJECT_INFO_FILE: &str = ".prj.json";
 
+#[derive(Debug)]
+pub enum ProjectRootMode {
+    CacheRoot,
+    ModulesRoot,
+    ProjectRoot
+}
 
-pub fn get_root(global: bool, mode: &str) -> Result<path::PathBuf> {
+pub fn get_root(global: bool, mode: &ProjectRootMode) -> Result<path::PathBuf> {
     match global {
         true => {
             let pdir = ProjectDirs::from("org", "csound", "cspm").expect("[ERROR] Cannot determine home directory");
@@ -45,7 +46,7 @@ pub fn get_root(global: bool, mode: &str) -> Result<path::PathBuf> {
         },
         false => {
             let pdir = std::env::current_dir()?;
-            println!("[INFO] Local env {} (root for {})", pdir.to_string_lossy(), mode);
+            println!("[INFO] Local env {} (root for {:?})", pdir.to_string_lossy(), mode);
             Ok(pdir.to_path_buf())
         }
     }
@@ -59,8 +60,8 @@ pub struct ProjectRoots {
 
 impl ProjectRoots {
     pub fn new() -> Result<Self> {
-        let project_root = get_root(false, "project-folder")?;
-        let cache_root = get_root(true, "cache-folder")?;
+        let project_root = get_root(false, &ProjectRootMode::ProjectRoot)?;
+        let cache_root = get_root(true, &ProjectRootMode::CacheRoot)?;
         Ok(Self {
             project_root,
             modules_root: path::PathBuf::new(),
@@ -69,9 +70,8 @@ impl ProjectRoots {
     }
 
     pub fn set_modules_root(&mut self) -> Result<()> {
-        let pinfo = fs::read_to_string(self.project_root.join(PROJECT_INFO_FILE))?;
-        let pinfo_json: ProjectInfo = serde_json::from_str(&pinfo)?;
-        self.modules_root = get_root(pinfo_json.global_modules, "modules-folder")?;
+        let pinfo = read_project_info()?;
+        self.modules_root = get_root(pinfo.global_modules, &ProjectRootMode::ModulesRoot)?;
         Ok(())
     }
 }
@@ -83,4 +83,11 @@ pub fn create_info_file(prj_root: &path::Path, global: bool) -> Result<()> {
     let prj_json = serde_json::to_string_pretty::<ProjectInfo>(&prj_info)?;
     fs::write(&prj_info_file, prj_json)?;
     Ok(())
+}
+
+pub fn read_project_info() -> Result<ProjectInfo> {
+    let root = get_root(false, &ProjectRootMode::ProjectRoot)?;
+    let pinfo = fs::read_to_string(root.join(PROJECT_INFO_FILE))?;
+    let pinfo_json: ProjectInfo = serde_json::from_str(&pinfo)?;
+    Ok(pinfo_json)
 }

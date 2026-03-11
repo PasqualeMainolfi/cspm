@@ -19,7 +19,10 @@ use core::{
     install_plugins,
     get_cspm_version,
     search_package,
-    validate_project
+    validate_project,
+    install_globally,
+    uninstall_globally,
+    upgrade_globally
 };
 
 fn main() {
@@ -87,6 +90,34 @@ fn main() {
             println!("[INFO] Update the project's dependencies {:?}", module);
             if let Err(e) = update_package(module, force) {
                 eprintln!("[ERROR] An error occurred while updating the package: {e}");
+                return;
+            }
+        },
+        // install modules globally
+        CsCommands::Install { module, force } => {
+            println!("[INFO] Install modules globally");
+            for m in module.iter() {
+                if let Err(e) = install_globally(m.clone(), force) {
+                    eprintln!("[ERROR] An error occurred while installing globally: {e}");
+                    return;
+                }
+            }
+        },
+        // uninstall modules globally
+        CsCommands::Uninstall { module, force } => {
+            println!("[INFO] Install modules globally");
+            for m in module {
+                if let Err(e) = uninstall_globally(m, force) {
+                    eprintln!("[ERROR] An error occurred while uninstalling globally: {e}");
+                    return;
+                }
+            }
+        },
+        // upgrade modules globally
+        CsCommands::Upgrade { module, force } => {
+            println!("[INFO] Upgrade modules globally");
+            if let Err(e) = upgrade_globally(module, force) {
+                eprintln!("[ERROR] An error occurred while upgrading globally: {e}");
                 return;
             }
         },

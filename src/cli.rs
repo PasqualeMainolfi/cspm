@@ -43,6 +43,36 @@ pub enum CsCommands {
         force: bool
     },
 
+    /// Install modules globally (without manifest)
+    #[command(long_flag = "install")]
+    Install {
+        module: Vec<String>, // use @major.minor.patch to specify the version
+
+        /// force resolve dependencies
+        #[arg(short = 'f', long = "force")]
+        force: bool
+    },
+
+    /// Uninstall modules globally (without manifest)
+    #[command(long_flag = "uninstall")]
+    Uninstall {
+        module: Vec<String>, // use @major.minor.patch to specify the version
+
+        /// force resolve dependencies
+        #[arg(short = 'f', long = "force")]
+        force: bool
+    },
+
+    /// Upgrade global modules (without manifest)
+    #[command(long_flag = "upgrade")]
+    Upgrade {
+        module: Option<Vec<String>>,
+
+        /// force resolve dependencies
+        #[arg(short = 'f', long = "force")]
+        force: bool
+    },
+
     /// Reinstall dependencies to the project
     Reinstall {
         module: Vec<String>, // use @major.minor.patch to specify the version
