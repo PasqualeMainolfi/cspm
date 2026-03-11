@@ -6,7 +6,10 @@ use flate2::read::GzDecoder;
 use tar::Archive;
 use walkdir::WalkDir;
 use std::{
-    collections::{ HashMap, HashSet }, fs, path, process
+    collections::{ HashMap, HashSet },
+    fs,
+    path,
+    process
 };
 
 
