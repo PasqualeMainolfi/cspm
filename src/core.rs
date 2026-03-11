@@ -129,7 +129,7 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
     let manifest_toml = Manifest::open_toml(&roots.project_root.join(MANIFEST_FILE))?;
 
     if let Some(_) = manifest_toml.dependencies.get(name) {
-        println!("[INFO] Remove module {} previously added...", name);
+        println!("[ADD::INFO] Remove module {} previously added...", name);
         remove_package(&name, force)?;
     }
 
@@ -140,7 +140,7 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
         LockFile::open_toml(&lpath)?
     };
 
-    println!("[ADD_MOD::INFO] Check and resolve dependencies...");
+    println!("[ADD::INFO] Check and resolve dependencies...");
     let mut mindex = read_internal_registry(&modules_index, RegistryMode::ModulesMode)?;
     let mut cindex = read_internal_registry(&cache_index, RegistryMode::CacheMode)?;
     let mut visited = HashSet::new();
@@ -155,16 +155,16 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
         Some(&mut lockfile)
     )?;
 
-    println!("[ADD_MOD::INFO] Write module's registry");
+    println!("[ADD::INFO] Write module's registry");
     write_internal_registry(&modules_index, mindex)?;
     write_internal_registry(&cache_index, cindex)?;
 
-    println!("[ADD_MOD::INFO] Update Cspm.toml file");
+    println!("[ADD::INFO] Update Cspm.toml file");
     update_manifest(&name, &mversion)?;
 
     // update manifest in memory
     let re_manifest_toml = Manifest::open_toml(&roots.project_root.join(MANIFEST_FILE))?; // re-open after changes
-    println!("[ADD_MOD::INFO] Update Cspm.lock file");
+    println!("[ADD::INFO] Update Cspm.lock file");
     lockfile.package.retain(|p| p.name != re_manifest_toml.package.name);
     lockfile.package.push(LockChild {
         name: re_manifest_toml.package.name,
@@ -178,7 +178,7 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
 
     LockFile::write_toml(&lpath, &lockfile)?;
 
-    println!("[ADD_MOD::INFO] Done");
+    println!("[ADD::INFO] Done");
     Ok(())
 }
 
@@ -314,7 +314,7 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
         LockFile::open_toml(&lpath)?
     };
 
-    println!("[REMOVE_MOD::INFO] Remove package {} from cs_modules folder", pname);
+    println!("[REMOVE::INFO] Remove package {} from cs_modules folder", pname);
     match manifest_toml.dependencies.get(pname) {
         Some(_) => { },
         None => {
@@ -324,21 +324,21 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
     };
 
     // delete from modules (also dependencies)
-    println!("[REMOVE_MOD::INFO] Remove package {} dependencies", pname);
+    println!("[REMOVE::INFO] Remove package {} dependencies", pname);
     let mindex_path = roots.modules_root.join(CS_MODULES_FOLDER).join(CS_MODULES_INDEX);
     let mut mindex = read_internal_registry(&mindex_path, RegistryMode::ModulesMode)?;
     remove_helper(&cs_modules_path, &pname, force, &mut mindex, Some(&mut lockfile))?;
 
     // update module's registry
-    println!("[REMOVE_MOD::INFO] Write module's registry");
+    println!("[REMOVE::INFO] Write module's registry");
     write_internal_registry(&mindex_path, mindex)?;
 
     // delete from manifest
-    println!("[REMOVE_MOD::INFO] Remove package {} from Cspm.toml file", pname);
+    println!("[REMOVE::INFO] Remove package {} from Cspm.toml file", pname);
     manifest_toml.dependencies.remove(pname);
 
     // update lockfile
-    println!("[REMOVE_MOD::INFO] Update Cspm.lock file");
+    println!("[REMOVE::INFO] Update Cspm.lock file");
     lockfile.package.retain(|p| p.name != manifest_toml.package.name);
     lockfile.package.push(LockChild {
         name: manifest_toml.package.name.clone(),
@@ -390,7 +390,7 @@ fn remove_helper(
             if !force {
                 if dset.contains(&current) {
                     println!(
-                        "[REMOVE_MOD::WARNING] Module {} removal skipped because the module {} depends on it. Use [--force] if you still want to delete",
+                        "[REMOVE::WARNING] Module {} removal skipped because the module {} depends on it. Use [--force] if you still want to delete",
                         current,
                         mtoml.package.name
                     );
@@ -411,9 +411,9 @@ fn remove_helper(
             }
 
             if pfolder.exists() {
-                println!("[REMOVE_MOD::INFO] Remove package {}", current.to_string());
+                println!("[REMOVE::INFO] Remove package {}", current.to_string());
                 fs::remove_dir_all(&pfolder)?;
-                println!("[REMOVE_MOD::INFO] Update project's modules registry");
+                println!("[REMOVE::INFO] Update project's modules registry");
                 remove_entry_from_registry(current.clone(), mindex);
                 if let Some(lfile) = lockfile.as_mut() {
                     let (pkg_name, pkg_version) = parse_module_name(&current);
@@ -456,20 +456,20 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
     };
 
     for (pname, pversion) in to_update {
-        println!("[UPDATE_MOD::INFO] Check latest version for module {}", &pname);
+        println!("[UPDATE::INFO] Check latest version for module {}", &pname);
         let latest_version = resolve_module_version(REMOTE_REGISTRY_INDEX, &pname, Some(pversion.clone()))?;
         if latest_version == pversion {
-            println!("[UPDATE_MOD::INFO] Module {} is up to date", pname);
+            println!("[UPDATE::INFO] Module {} is up to date", pname);
             continue;
         }
 
-        println!("[UPDATE_MOD::INFO] Remove module {}@{}", &pname, &pversion);
+        println!("[UPDATE::INFO] Remove module {}@{}", &pname, &pversion);
         remove_package(&pname, force)?;
 
-        println!("[UPDATE_MOD::INFO] Update module {} to {}", &pname, &latest_version);
+        println!("[UPDATE::INFO] Update module {} to {}", &pname, &latest_version);
         add_package(&pname, Some(latest_version), force)?;
 
-        println!("[UPDATE_MOD::INFO] Module {} is up to date", &pname);
+        println!("[UPDATE::INFO] Module {} is up to date", &pname);
     }
 
     Ok(())
@@ -817,7 +817,7 @@ pub fn publish_module() -> Result<()> {
     let pkg_tar_name = format!("{}-{}.tar.gz", name, version);
     let tar_path = prj_root.join(pkg_tar_name.clone());
 
-    println!("[PACKING_MODINFO] Packing module {} version {}", name, version);
+    println!("[PACKING_MOD::INFO] Packing module {} version {}", name, version);
 
     let tar_file = fs::File::create(&tar_path)?;
     let gz_encoder = GzEncoder::new(tar_file, Compression::default());
@@ -996,7 +996,7 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
         None
     )?;
 
-    println!("[ADD_MOD::INFO] Write module's registry");
+    println!("[INSTALL::INFO] Write module's registry");
     write_internal_registry(&modules_index, mindex)?;
     write_internal_registry(&cache_index, cindex)?;
 
@@ -1047,12 +1047,12 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
         let (name, version) = parse_module_name(entry);
         let latest_version = resolve_module_version(REMOTE_REGISTRY_INDEX, &entry, Some(version.clone()))?;
         if latest_version == version {
-            println!("[UPDATE_MOD::INFO] Module {} is up to date", &name);
+            println!("[UPGRADE::INFO] Module {} is up to date", &name);
         } else {
-            println!("[UPDATE_MOD::INFO] Remove module {}@{}", &name, &version);
+            println!("[UPGRADE::INFO] Remove module {}@{}", &name, &version);
             uninstall_globally(name.clone(), force)?;
 
-            println!("[UPDATE_MOD::INFO] Update module {} to {}", &name, &latest_version);
+            println!("[UPGRADE::INFO] Update module {} to {}", &name, &latest_version);
             install_globally(name, force)?;
         }
     }
