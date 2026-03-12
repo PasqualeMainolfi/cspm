@@ -2,14 +2,11 @@ use anyhow::Result;
 use serde::{ Deserialize, Serialize };
 use sha2::{ Sha256, Digest };
 use reqwest;
-use flate2::read::GzDecoder;
-use tar::Archive;
 use walkdir::WalkDir;
 use std::{
     collections::{ HashMap, HashSet },
     fs,
-    path,
-    process
+    path
 };
 
 
@@ -24,12 +21,15 @@ pub trait ManageToml {
     fn write_toml(mpath: &path::Path, mtoml: &Self) -> Result<()>;
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct LockFile {
     pub version: u32,
 
     #[serde(rename = "package", skip_serializing_if = "Vec::is_empty")]
-    pub package: Vec<LockChild>
+    pub package: Vec<LockChild>,
+
+    #[serde(rename = "plugins", skip_serializing_if = "HashSet::is_empty")]
+    pub plugins: HashSet<String>
 }
 
 impl ManageToml for LockFile {
@@ -59,10 +59,7 @@ pub struct LockChild {
     pub checksum: String,
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub dependencies: Vec<String>,
-
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub plugins: Vec<String>
+    pub dependencies: Vec<String>
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -134,8 +131,8 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub dependencies: HashMap<String, String>,
 
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub plugins: HashMap<String, String>
+    #[serde(default, skip_serializing_if = "HashSet::is_empty")]
+    pub plugins: HashSet<String>
 }
 
 impl ManageToml for Manifest {
@@ -208,28 +205,6 @@ pub fn computer_checksum(path_to_module: &path::Path) -> Result<String> {
     }
 
     Ok(format!("{:x}", hasher.finalize()))
-}
-
-pub fn download_package(registry: &str, pname: &str, version: &str, cache_path: &path::Path, dest_path: &path::Path) -> Result<()> {
-    let url = format!("{}/{}-{}.tar.gz", registry, pname, version); // should be tar.gz
-    println!("[DOWNLOAD::INFO] Download package {} from {}", pname, registry);
-
-    let mut response = reqwest::blocking::get(&url)?;
-    let temp_file_path = cache_path.join(format!("{}_temp.tar.gz", pname));
-
-    {
-        let mut temp_file = std::fs::File::create(&temp_file_path)?;
-        std::io::copy(&mut response, &mut temp_file)?;
-    }
-
-    println!("[DOWNLOAD::INFO] Unpack package");
-    let tar_gz = std::fs::File::open(&temp_file_path)?;
-    let decoder = GzDecoder::new(&tar_gz);
-    let mut archive = Archive::new(decoder);
-    archive.unpack(cache_path.join(dest_path))?;
-    println!("[DOWNLOAD::INFO] Remove downloaded temp file");
-    std::fs::remove_file(&temp_file_path)?;
-    Ok(())
 }
 
 pub fn resolve_module_version(url: &str, pname: &str, version: Option<String>) -> Result<String> {
@@ -353,75 +328,37 @@ pub fn parse_version(version: &str) -> u32 {
     return sum
 }
 
-pub enum RegistryAnswer {
-    ExistSame,
-    ExistYoung,
-    ExistOld,
-    NotExist
+pub enum QueryVersion {
+    Same,
+    Young,
+    Old
 }
 
-pub fn query_registry(registry: &RegistryData, pkg_name: &str, version: &str) -> RegistryAnswer {
+pub fn compare_version(internal_version: &str, proposed_version: &str) -> QueryVersion {
+    let v1 = parse_version(internal_version);
+    let v2 = parse_version(proposed_version);
+    if v1 == v2 { return QueryVersion::Same }
+    if v1 < v2 { return QueryVersion::Old }
+    return QueryVersion::Young
+}
+
+pub fn query_registry(registry: &RegistryData, pkg_name: &str) -> Option<String> {
     match registry {
         RegistryData::ModulesRegistry(data) => {
-            if let Some(pkg_version) = data.get(pkg_name) {
-                if version.is_empty() {
-                    return RegistryAnswer::ExistOld
-                }
-
-                if version == pkg_version {
-                    return RegistryAnswer::ExistSame
-                } else {
-                    let inside_version = parse_version(pkg_version);
-                    let proposed_version = parse_version(version);
-                    if inside_version > proposed_version {
-                        return RegistryAnswer::ExistYoung
-                    } else {
-                        return RegistryAnswer::ExistOld
-                    }
-                }
-            } else {
-                return RegistryAnswer::NotExist
-            }
+            if let Some(version) = data.get(pkg_name) { return Some(version.clone()) }
         },
-        RegistryData::CacheRegistry(_) => {}
+        RegistryData::CacheRegistry(_) => { }
     }
-
-    RegistryAnswer::NotExist
+    None
 }
 
-pub fn run_csound_script(entry_point: &(String, String), cs_options: &Vec<String>) -> Result<()> {
-    let (file1, file2) = entry_point;
-    let mut c = process::Command::new("csound");
-    c.arg(file1);
-    if !file2.is_empty() { c.arg(file2); }
-    if !cs_options.is_empty() {
-        for flag in cs_options.iter() {
-            c.arg(flag);
-        }
+pub fn from_registry_to_list(registry: &RegistryData) -> HashSet<String> {
+    match registry {
+        RegistryData::ModulesRegistry(data) => {
+            return data.iter().map(|(d, v)| format!("{}@{}", d, v)).collect::<HashSet<String>>()
+        },
+        RegistryData::CacheRegistry(_) => HashSet::new()
     }
-
-    let status = c.status()?;
-    if !status.success() {
-        return Err(anyhow::anyhow!("[RUN::ERROR] Csound exited with non-zero status: {}", status));
-    }
-
-    Ok(())
-}
-
-pub fn run_risset(rst_options: &Vec<String>) -> Result<()> {
-    let mut c = process::Command::new("risset");
-    if !rst_options.is_empty() {
-        for flag in rst_options.iter() {
-            c.arg(flag);
-        }
-    }
-
-    let status = c.status()?;
-    if !status.success() {
-        return Err(anyhow::anyhow!("[RISSET::ERROR] Plugins installation exited with non-zero status: {}", status));
-    }
-
-    Ok(())
 }
 
 pub fn check_manifest_deps(modules_folder: &path::Path, manifest: &Manifest) -> Result<()> {

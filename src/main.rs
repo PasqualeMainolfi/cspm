@@ -1,28 +1,33 @@
 pub mod cli;
 pub mod parser;
 pub mod paths;
-pub mod core;
+pub mod glb_core;
+pub mod prj_core;
+pub mod utils;
 
 use clap::Parser;
 use cli::{ CsCli, CsCommands };
-use core::{
+use crate::glb_core::{
+    get_cspm_version,
+    search_package,
+    manage_cache,
+    install_globally,
+    uninstall_globally,
+    upgrade_globally
+};
+
+use prj_core::{
     create_project,
     add_package,
     remove_package,
     update_package,
-    manage_cache,
     sync_project,
     build_from_manifest,
     build_from_lock,
     reinstall_module,
     run_project,
     install_plugins,
-    get_cspm_version,
-    search_package,
-    validate_project,
-    install_globally,
-    uninstall_globally,
-    upgrade_globally
+    validate_project
 };
 
 fn main() {

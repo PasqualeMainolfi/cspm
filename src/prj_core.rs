@@ -1,19 +1,21 @@
 use anyhow::Result;
 use tar::Builder;
 use serde_json;
-use toml::Value;
 use flate2::{ write::GzEncoder, Compression };
 use fs_extra::dir::{ copy, CopyOptions };
 use std::{
-    fs,
-    env,
-    path,
-    process::Command,
     collections::{
         HashMap,
         HashSet,
         VecDeque
-    }
+    }, fs, path, vec
+};
+
+use crate::utils::{
+    download_package,
+    run_csound_script,
+    check_risset,
+    run_risset
 };
 
 use crate::parser::{
@@ -26,20 +28,19 @@ use crate::parser::{
     Manifest,
     RegistryData,
     RegistryMode,
-    RemoteRegistryIndex,
-    RegistryAnswer,
+    QueryVersion,
     add_entry_to_registry,
     check_manifest_deps,
     computer_checksum,
-    download_package,
     parse_module_name,
-    query_registry,
     read_internal_registry,
     remove_entry_from_registry,
     resolve_module_version,
-    run_csound_script,
-    run_risset,
     write_internal_registry,
+    query_registry,
+    compare_version,
+    from_registry_to_list
+
 };
 
 use crate::paths::{
@@ -56,7 +57,6 @@ use crate::paths::{
     REMOTE_REGISTRY_INDEX,
     CS_CACHE_INDEX,
     CS_MODULES_INDEX,
-    CSPM_MANIFEST,
     ProjectRoots,
     ProjectRootMode,
     get_root,
@@ -128,14 +128,22 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
     let mversion = resolve_module_version(REMOTE_REGISTRY_INDEX, &name, version)?;
     let manifest_toml = Manifest::open_toml(&roots.project_root.join(MANIFEST_FILE))?;
 
-    if let Some(_) = manifest_toml.dependencies.get(name) {
-        println!("[ADD::INFO] Remove module {} previously added...", name);
-        remove_package(&name, force)?;
+    if let Some(internal_version) = manifest_toml.dependencies.get(name) { // check also registry and compare version
+        match compare_version(&internal_version, &mversion) {
+            QueryVersion::Old | QueryVersion::Young => {
+                println!("[INSTALL::INFO] Remove module {}@{} previously added", name, mversion);
+                remove_package(name, force)?;
+            },
+            QueryVersion::Same => {
+                println!("[INSTALL::INFO] Module {}@{} already installed", name, mversion);
+                return Ok(());
+            }
+        }
     }
 
     // load lockfile
     let mut lockfile: LockFile = if !lpath.exists() {
-        LockFile { version: LOCK_VERSION, package: Vec::new() }
+        LockFile { version: LOCK_VERSION, ..Default::default() }
     } else {
         LockFile::open_toml(&lpath)?
     };
@@ -196,7 +204,7 @@ fn update_manifest(pname: &str, version: &str) -> Result<()> {
     Ok(())
 }
 
-fn resolve_dependencies(
+pub fn resolve_dependencies(
     cfolder: &path::Path,
     mfolder: &path::Path,
     mname: &str,
@@ -263,6 +271,7 @@ fn resolve_dependencies(
         // remove old dependencies and add child to lockfile
         println!("[RESOLVE_DEPS::INFO] Add child to Cspm.lock file and remove old dependencies");
         lfile.package.retain(|p| !(p.name == mname && p.version == version));
+        lfile.plugins = mod_manifest.plugins.clone();
         lfile.package.push(LockChild {
             name: mname.to_string(),
             version: version.to_string(),
@@ -272,10 +281,6 @@ fn resolve_dependencies(
                 .iter()
                 .map(|(d, v)| format!("{}@{}", d, v))
                 .collect(),
-            plugins: mod_manifest.plugins
-                .iter()
-                .map(|(d, v)| format!("{}@{}", d, v))
-                .collect()
         });
     }
 
@@ -309,7 +314,7 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
 
     // load lockfile
     let mut lockfile: LockFile = if !lpath.exists() {
-        LockFile { version: LOCK_VERSION, package: Vec::new() }
+        LockFile { version: LOCK_VERSION, ..Default::default() }
     } else {
         LockFile::open_toml(&lpath)?
     };
@@ -357,7 +362,7 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
 }
 
 // TO BE OPTIMIZED -> maybe use lock to find deps
-fn remove_helper(
+pub fn remove_helper(
     cs_modules_path: &path::Path,
     pname: &str,
     force: bool,
@@ -427,8 +432,12 @@ fn remove_helper(
 }
 
 pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
-    let prj_root = get_root(false, &ProjectRootMode::ProjectRoot)?;
-    let manifest = Manifest::open_toml(&prj_root.join(MANIFEST_FILE))?;
+    let mut roots = ProjectRoots::new()?;
+    roots.set_modules_root()?;
+    let mindex_path = roots.modules_root.join(CS_MODULES_INDEX);
+    let registry = read_internal_registry(&mindex_path, RegistryMode::ModulesMode)?;
+
+    let manifest = Manifest::open_toml(&roots.project_root.join(MANIFEST_FILE))?;
     let installed_modules = manifest.dependencies;
 
     if let Some(mods) = &modules {
@@ -439,95 +448,35 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
         }
     }
 
-    let to_update: Vec<(String, String)> = match modules {
-        Some(mods) => {
-            installed_modules
-                .iter()
-                .filter(|(d, _)| mods.contains(&d))
-                .map(|(d, v)| (d.to_string(), v.to_string()))
-                .collect()
-        },
-        None => {
-            installed_modules
-                .iter()
-                .map(|(d, v)| (d.to_string(), v.to_string()))
-                .collect()
+    let mut to_update: HashSet<String> = HashSet::new();
+    if let Some(mods) = &modules {
+        for module in mods.iter() {
+            if let Some(rvers) = query_registry(&registry, &module) {
+                let latest_version = resolve_module_version(REMOTE_REGISTRY_INDEX, &module, Some(rvers.clone()))?;
+                match compare_version(&rvers, &latest_version) {
+                    QueryVersion::Young => println!("[UPGRADE::INFO] Module {} is up to date", &module),
+                    QueryVersion::Old => { to_update.insert(format!("{}@{}", module.clone(), latest_version)); },
+                    QueryVersion::Same => println!("[UPGRADE::INFO] Module {} already exists", &module),
+                }
+            } else {
+                println!("[UPGRADE::INFO] Module {} does not exists in registry", &module);
+            }
         }
-    };
+    } else {
+        to_update = from_registry_to_list(&registry);
+    }
 
-    for (pname, pversion) in to_update {
-        println!("[UPDATE::INFO] Check latest version for module {}", &pname);
-        let latest_version = resolve_module_version(REMOTE_REGISTRY_INDEX, &pname, Some(pversion.clone()))?;
-        if latest_version == pversion {
-            println!("[UPDATE::INFO] Module {} is up to date", pname);
-            continue;
-        }
-
+    for entry in to_update.iter() {
+        let (pname, pversion) = parse_module_name(entry);
         println!("[UPDATE::INFO] Remove module {}@{}", &pname, &pversion);
         remove_package(&pname, force)?;
 
-        println!("[UPDATE::INFO] Update module {} to {}", &pname, &latest_version);
-        add_package(&pname, Some(latest_version), force)?;
+        println!("[UPDATE::INFO] Update module {} to {}", &pname, &pversion);
+        add_package(&pname, Some(pversion), force)?;
 
         println!("[UPDATE::INFO] Module {} is up to date", &pname);
     }
 
-    Ok(())
-}
-
-pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
-    let root = get_root(true, &ProjectRootMode::CacheRoot)?;
-    let cache_folder = root.join(CS_MODULES_CACHE_FOLDER);
-
-    if !cache_folder.exists() || !cache_folder.is_dir() {
-        println!("[CACHE::INFO] Cache is empty. Nothing to do");
-        return Ok(())
-    }
-
-    let cache_index_path = cache_folder.join(CS_CACHE_INDEX);
-
-    if clean {
-        let mut cindex = read_internal_registry(&cache_index_path, RegistryMode::CacheMode)?;
-        for entry in fs::read_dir(cache_folder)? {
-            let entry = entry?;
-            if !entry.file_type()?.is_dir() { continue; }
-
-            let pkg_path = entry.path();
-            let pkg_name = entry.file_name().to_string_lossy().to_string();
-
-            println!("[CACHE::INFO] Remove package {} from cache", pkg_name);
-            fs::remove_dir_all(&pkg_path)?;
-
-            println!("[CACHE::INFO] Update cache registry");
-            remove_entry_from_registry(pkg_name.clone(), &mut cindex);
-        }
-
-        println!("[CACHE::INFO] Update cache registry");
-        write_internal_registry(&cache_index_path, cindex)?;
-
-        return Ok(())
-    }
-
-    // cache list
-    if list {
-        println!("[CACHE::INFO] Cache status:");
-        println!("");
-        for entry in fs::read_dir(cache_folder)? {
-            let entry = entry?;
-            let entry_path = entry.path();
-            let entry_manifest: Manifest = Manifest::open_toml(&entry_path.join(MANIFEST_FILE))?;
-            let pname = entry_manifest.package.name;
-            let pversion = entry_manifest.package.version;
-            let pdeps = entry_manifest.dependencies;
-            let deps_format: String = pdeps.iter().map(|(d, v)| format!("{}@{}", d, v)).collect::<Vec<String>>().join(", ");
-
-            println!("***********************");
-            println!("> Module: {}@{}", pname, pversion);
-            println!("> Module dependencies: [{}]", deps_format);
-            println!("***********************");
-        }
-        println!("");
-    }
     Ok(())
 }
 
@@ -602,7 +551,7 @@ pub fn build_from_manifest(global: bool) -> Result<()> { // add plugins installa
 
     // load lockfile
     let mut lockfile: LockFile = if !lpath.exists() {
-        LockFile { version: LOCK_VERSION, package: Vec::new() }
+        LockFile { version: LOCK_VERSION, ..Default::default() }
     } else {
         LockFile::open_toml(&lpath)?
     };
@@ -632,7 +581,19 @@ pub fn build_from_manifest(global: bool) -> Result<()> { // add plugins installa
     write_internal_registry(&modules_index, mindex)?;
     write_internal_registry(&cache_index, cindex)?;
 
+    // rebuild plugins
+    println!("[BUILD::INFO] Check for installed plugins");
+    if manifest.plugins.is_empty() {
+        println!("[BUILD::INFO] No plugins declared in Cspm.toml file");
+    } else {
+        println!("[BUILD::INFO] Install plugins declared in Cspm.toml file");
+        let mut rsoptions = vec!["install".to_string()];
+        rsoptions.extend(manifest.plugins.clone());
+        run_risset(&rsoptions)?;
+    }
+
     println!("[BUILD::INFO] Update lock file");
+    lockfile.plugins = manifest.plugins;
     lockfile.package.retain(|p| p.name != manifest.package.name);
     lockfile.package.push(LockChild {
         name: manifest.package.name.clone(),
@@ -651,7 +612,7 @@ pub fn build_from_manifest(global: bool) -> Result<()> { // add plugins installa
     Ok(())
 }
 
-pub fn build_from_lock(global: bool) -> Result<()> { // add plugins installation from lock when build
+pub fn build_from_lock(global: bool) -> Result<()> {
     let mut roots = ProjectRoots::new()?;
 
     create_info_file(&roots.project_root, global)?;
@@ -722,6 +683,17 @@ pub fn build_from_lock(global: bool) -> Result<()> { // add plugins installation
     println!("[BUILD::INFO] Write module's registry");
     write_internal_registry(&modules_index_path, mindex)?;
 
+    // rebuild plugins
+    println!("[BUILD::INFO] Check for installed plugins");
+    if lockfile.plugins.is_empty() {
+        println!("[BUILD::INFO] No plugins declared in Cspm.lock file");
+    } else {
+        println!("[BUILD::INFO] Install plugins declared in Cspm.lock file");
+        let mut rsoptions = vec!["install".to_string()];
+        rsoptions.extend(lockfile.plugins);
+        run_risset(&rsoptions)?;
+    }
+
     println!("[BUILD::INFO] Environment perfectly restored!");
     println!("[BUILD::INFO] Done");
     Ok(())
@@ -758,45 +730,64 @@ pub fn run_project(csoptions: &Vec<String>) -> Result<()> {
     Ok(())
 }
 
-pub fn install_plugins(rstoptions: &Vec<String>) -> Result<()> {
+pub fn install_plugins(rstoptions: &Vec<String>) -> Result<()> { // add plugins to manifest and lockfile
     // check if risset is installed
-
-    if Command::new("risset").output().is_err() {
-        println!("[RISSET::WARNING] risset not found. Installing...");
-        match env::consts::OS {
-            "linux" | "macos" => {
-                println!("[RISSET::INFO] Install uv");
-                Command::new("curl")
-                    .args(["-LsSf", "https://astral.sh/uv/install.sh", "|", "sh"])
-                    .status()?;
-            },
-            "windows" => {
-                println!("[RISSET::INFO] Install uv");
-                Command::new("powershell")
-                    .args(["-ExecutionPolicy", "ByPass"])
-                    .args(["-c", "irm https://astral.sh/uv/install.ps1", "|", "iex"])
-                    .status()?;
-            },
-            _ => return Err(anyhow::anyhow!("[RISSET::ERROR] Unknown OS"))
-        }
-
-        println!("[RISSET::INFO] Install risset");
-        Command::new("uv")
-            .arg("tool")
-            .args(["install", "risset"])
-            .status()?;
-
-        println!("[RISSET::INFO] Upgrade risset");
-        Command::new("uv")
-            .arg("tool")
-            .args(["upgrade", "risset"])
-            .status()?;
-    }
-
-    println!("[RISSET::INFO] risset has been installed");
+    check_risset()?;
     // run risset
     println!("[RISSET::INFO] Run plugins installation");
-    run_risset(rstoptions)?;
+    if let Ok(()) = run_risset(rstoptions) {
+        let mut to_add = HashSet::new();
+        let mut to_remove = HashSet::new();
+        match rstoptions.contains(&"install".to_string()) {
+            true => {
+                to_add = rstoptions
+                    .iter()
+                    .filter(|entry| matches!(entry.as_str(), "install" | "--force" | "-f"))
+                    .cloned()
+                    .collect();
+            },
+            false => {
+                match rstoptions.contains(&"remove".to_string()) {
+                    true => {
+                        to_remove = rstoptions
+                            .iter()
+                            .filter(|entry| !matches!(entry.as_str(), "remove" | "--force" | "-f"))
+                            .collect();
+                    },
+                    false => { }
+                }
+            }
+        };
+
+        if let Ok(proot) = get_root(false, &ProjectRootMode::ProjectRoot) {
+            let manifest_path = proot.join(MANIFEST_FILE);
+            let lockfile_path = proot.join(LOCK_FILE);
+            if manifest_path.exists() && manifest_path.is_file() {
+                println!("[RISSET::INFO] Update Cspm.toml");
+                let mut mtoml = Manifest::open_toml(&manifest_path)?;
+                mtoml.plugins.extend(to_add.clone());
+                mtoml.plugins.retain(|plug| !to_remove.contains(plug));
+
+                // load lockfile
+                println!("[RISSET::INFO] Update Cspm.lock");
+                let mut lockfile: LockFile = if !lockfile_path.exists() {
+                    LockFile { version: LOCK_VERSION, ..Default::default() }
+                } else {
+                    LockFile::open_toml(&lockfile_path)?
+                };
+
+                lockfile.plugins.extend(to_add);
+                lockfile.plugins.retain(|plug| !to_remove.contains(plug));
+
+                println!("[RISSET::INFO] Write Cspm.toml");
+                Manifest::write_toml(&manifest_path, &mtoml)?;
+
+                println!("[RISSET::INFO] Write Cspm.lock");
+                LockFile::write_toml(&lockfile_path, &lockfile)?;
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -855,31 +846,6 @@ pub fn publish_module() -> Result<()> {
     println!("  3. Add your module and version to the 'index.json' file.");
     println!("  4. Open a Pull Request to the official repository.");
     println!("Once approved, your module will be available to everyone!");
-
-    Ok(())
-}
-
-pub fn get_cspm_version() -> Result<String> {
-    let cspm_manifest: Value = toml::from_str(CSPM_MANIFEST)?;
-    return Ok(cspm_manifest["package"]["version"].to_string())
-}
-
-pub fn search_package(module_name: &str) -> Result<()> {
-    println!("[SEARCH_MOD::INFO] Search module: {}", module_name);
-    let response = reqwest::blocking::get(REMOTE_REGISTRY_INDEX)?;
-    let indexes: HashMap<String, RemoteRegistryIndex> = response.json()?;
-
-    match indexes.get(module_name) {
-        Some(pkg) => {
-            println!("***********************");
-            println!("Module found:");
-            println!("  Module name: {}", module_name);
-            println!("  Available versions: {:?}", pkg.version);
-            println!("  Description: {}", pkg.description);
-            println!("***********************");
-        },
-        None => println!("[SEARCH_MOD::INFO] Package {} not found in registry", module_name)
-    }
 
     Ok(())
 }
@@ -949,113 +915,5 @@ pub fn validate_project() -> Result<()> {
         build_from_manifest(pinfo.global_modules)?;
     }
     println!("[VALIDATE::INFO] The project is in healthy status");
-    Ok(())
-}
-
-pub fn install_globally(module: String, force: bool) -> Result<()> {
-    let croot = get_root(true, &ProjectRootMode::CacheRoot)?;
-    let mroot = get_root(true, &ProjectRootMode::ModulesRoot)?;
-
-    let cache_folder = croot.join(CS_MODULES_CACHE_FOLDER);
-    let cache_index = cache_folder.join(CS_CACHE_INDEX);
-    let modules_folder = mroot.join(CS_MODULES_FOLDER);
-    let modules_index = modules_folder.join(CS_MODULES_INDEX);
-
-    if !cache_folder.is_dir() { fs::create_dir_all(&cache_folder)?; }
-    if !modules_folder.is_dir() { fs::create_dir_all(&modules_folder)?; }
-
-    let mut mindex = read_internal_registry(&modules_index, RegistryMode::ModulesMode)?;
-    let mut cindex = read_internal_registry(&cache_index, RegistryMode::CacheMode)?;
-
-    let (name, version) = parse_module_name(&module);
-    let version = if !version.is_empty() { Some(version) } else { None };
-    let mversion = resolve_module_version(REMOTE_REGISTRY_INDEX, &name, version)?;
-
-    match query_registry(&mindex, &name, &mversion) {
-        RegistryAnswer::ExistOld | RegistryAnswer::ExistYoung => {
-            println!("[INSTALL::INFO] Remove module {}@{} previously added", name, mversion);
-            uninstall_globally(name.clone(), force)?;
-        }
-        RegistryAnswer::ExistSame => {
-            println!("[INSTALL::INFO] Module {}@{} already installed", name, mversion);
-            return Ok(());
-        }
-        RegistryAnswer::NotExist => { }
-    }
-
-    println!("[INSTALL::INFO] Check and resolve dependencies...");
-    let mut visited = HashSet::new();
-    resolve_dependencies(
-        &cache_folder,
-        &modules_folder,
-        &name,
-        &mversion,
-        &mut visited,
-        &mut mindex,
-        &mut cindex,
-        None
-    )?;
-
-    println!("[INSTALL::INFO] Write module's registry");
-    write_internal_registry(&modules_index, mindex)?;
-    write_internal_registry(&cache_index, cindex)?;
-
-    Ok(())
-}
-
-pub fn uninstall_globally(module: String, force: bool) -> Result<()> {
-    let mroot = get_root(true, &ProjectRootMode::ModulesRoot)?;
-    let cs_modules_path = mroot.join(CS_MODULES_FOLDER);
-    let mindex_path = cs_modules_path.join(CS_MODULES_INDEX);
-    let mut mindex = read_internal_registry(&mindex_path, RegistryMode::ModulesMode)?;
-
-    let (name, _) = parse_module_name(&module);
-    println!("[UNINSTALL::INFO] Remove package {} from cs_modules folder", name);
-
-    // delete from modules (also dependencies)
-    println!("[UNINSTALL::INFO] Remove package {} dependencies", name);
-    remove_helper(&cs_modules_path, &name, force, &mut mindex, None)?;
-
-    // update module's registry
-    println!("[UNINSTALL::INFO] Write module's registry");
-    write_internal_registry(&mindex_path, mindex)?;
-
-    Ok(())
-}
-
-pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()> {
-    let mroot = get_root(true, &ProjectRootMode::ModulesRoot)?;
-    let cs_modules_path = mroot.join(CS_MODULES_FOLDER);
-    let mindex_path = cs_modules_path.join(CS_MODULES_INDEX);
-    let registry = read_internal_registry(&mindex_path, RegistryMode::ModulesMode)?;
-
-    let mut to_update: HashSet<String> = HashSet::new();
-    if let Some(mods) = &modules {
-        for module in mods.iter() {
-            let (name, version) = parse_module_name(module);
-            match query_registry(&registry, &name, &version) {
-                RegistryAnswer::ExistYoung => println!("[UPGRADE::INFO] Module {} is up to date", &name),
-                RegistryAnswer::ExistOld => { to_update.insert(format!("{}@{}", name, version)); },
-                RegistryAnswer::ExistSame => println!("[UPGRADE::INFO] Module {} already exists", &name),
-                RegistryAnswer::NotExist => println!("[UPGRADE::INFO] Module {} does not exists. Nothing to do", &name)
-            }
-        }
-    }
-
-    for entry in to_update.iter() {
-        println!("[UPGRADE::INFO] Check latest version for module {}", &entry);
-        let (name, version) = parse_module_name(entry);
-        let latest_version = resolve_module_version(REMOTE_REGISTRY_INDEX, &entry, Some(version.clone()))?;
-        if latest_version == version {
-            println!("[UPGRADE::INFO] Module {} is up to date", &name);
-        } else {
-            println!("[UPGRADE::INFO] Remove module {}@{}", &name, &version);
-            uninstall_globally(name.clone(), force)?;
-
-            println!("[UPGRADE::INFO] Update module {} to {}", &name, &latest_version);
-            install_globally(name, force)?;
-        }
-    }
-
     Ok(())
 }
