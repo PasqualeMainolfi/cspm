@@ -80,16 +80,19 @@ A modern package manager for Csound
 Usage: cspm <COMMAND>
 
 Commands:
-  init, -i, --init        Create a new Csound project
-  add, -a, --add          Add dependencies to the project
+  init                    Create a new Csound project
+  add                     Add dependencies to the project
+  install                 Install modules globally (without manifest)
+  uninstall               Uninstall modules globally (without manifest)
+  upgrade                 Upgrade global modules (without manifest)
   reinstall               Reinstall dependencies to the project
-  remove, -r, --remove    Remove dependencies from the project
-  update, -u, --update    Update the project's dependencies
-  cache, -c, --cache      Manage cspm cache
+  remove                  Remove dependencies from the project
+  update                  Update the project's dependencies
+  cache                   Manage cspm cache
   sync                    Check the project's environment status
-  build, -b, --build      Build project from manifest or lock file
-  publish, --publish      Publish Csound module
-  run, --run              Run Csound project
+  build                   Build project from manifest or lock file
+  publish                 Publish Csound module
+  run                     Run Csound project
   validate                Check Cspm.toml file and fixes issues automatically
   risset                  Install plugins using risset
   search                  Display module info
