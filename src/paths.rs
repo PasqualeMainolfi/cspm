@@ -2,6 +2,7 @@ use directories::ProjectDirs;
 use anyhow::Result;
 use std::{ fs, path };
 use crate::parser::ProjectInfo;
+use crate::utils::{ MessageType, log_message };
 
 pub const CSPM_MANIFEST: &str = include_str!("../Cargo.toml");
 pub const CSD_MAIN_TEMPLATE: &str = include_str!("../templates/main_template.csd");
@@ -35,18 +36,36 @@ pub enum ProjectRootMode {
 pub fn get_root(global: bool, mode: &ProjectRootMode) -> Result<path::PathBuf> {
     match global {
         true => {
-            let pdir = ProjectDirs::from("org", "csound", "cspm").expect("[ERROR] Cannot determine home directory");
+            let mes_err = log_message(MessageType::Error("Cannot determine home directory".to_string()), None, false);
+            let pdir = ProjectDirs::from("org", "csound", "cspm").expect(mes_err.as_str());
             let config_dir = pdir.config_dir();
             if !config_dir.exists() {
-                println!("[INFO] Create global cache root {}", pdir.data_dir().to_string_lossy());
+                log_message(
+                    MessageType::Info(
+                        format!("Create global cache root {}", pdir.data_dir().to_string_lossy())
+                    ), None, true
+                );
+
                 fs::create_dir_all(config_dir)?;
             }
-            println!("[INFO] Global cache root {}", pdir.data_dir().to_string_lossy());
+
+            log_message(
+                MessageType::Info(
+                    format!("Global cache root {}", pdir.data_dir().to_string_lossy())
+                ), None, true
+            );
+
             Ok(pdir.data_dir().to_path_buf())
         },
         false => {
             let pdir = std::env::current_dir()?;
-            println!("[INFO] Local env {} (root for {:?})", pdir.to_string_lossy(), mode);
+
+            log_message(
+                MessageType::Info(
+                    format!("Local env {} (root for {:?})", pdir.to_string_lossy(), mode)
+                ), None, true
+            );
+
             Ok(pdir.to_path_buf())
         }
     }

@@ -1,7 +1,16 @@
 use anyhow::Result;
 use serde_json::Value;
 use std::{collections::{ HashSet, HashMap }, fs};
-use crate::{parser::QueryVersion, prj_core::{ remove_helper, resolve_dependencies }};
+use crate::utils::{ MessageType, log_message };
+
+use crate::{
+    parser::QueryVersion,
+    prj_core::{
+        remove_helper,
+        resolve_dependencies
+    }
+};
+
 use crate::parser::{
     RegistryMode,
     RemoteRegistryIndex,
@@ -36,7 +45,8 @@ pub fn get_cspm_version() -> Result<String> {
 }
 
 pub fn search_package(module_name: &str) -> Result<()> {
-    println!("[SEARCH_MOD::INFO] Search module: {}", module_name);
+    log_message(MessageType::Info(format!("Search module: {}", module_name)), Some("SEARCH"), true);
+
     let response = reqwest::blocking::get(REMOTE_REGISTRY_INDEX)?;
     let indexes: HashMap<String, RemoteRegistryIndex> = response.json()?;
 
@@ -49,7 +59,9 @@ pub fn search_package(module_name: &str) -> Result<()> {
             println!("  Description: {}", pkg.description);
             println!("***********************");
         },
-        None => println!("[SEARCH_MOD::INFO] Package {} not found in registry", module_name)
+        None => {
+            log_message(MessageType::Warning(format!("Package {} not found in registry", module_name)), Some("SEARCH"), true);
+        }
     }
 
     Ok(())
@@ -60,7 +72,7 @@ pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
     let cache_folder = root.join(CS_MODULES_CACHE_FOLDER);
 
     if !cache_folder.exists() || !cache_folder.is_dir() {
-        println!("[CACHE::INFO] Cache is empty. Nothing to do");
+        log_message(MessageType::Info("Cache is empty. Nothing to do".to_string()), Some("CACHE"), true);
         return Ok(())
     }
 
@@ -75,13 +87,13 @@ pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
             let pkg_path = entry.path();
             let pkg_name = entry.file_name().to_string_lossy().to_string();
 
-            println!("[CACHE::INFO] Remove package {} from cache", pkg_name);
+            log_message(MessageType::Info(format!("Remove package {} from cache", pkg_name)), Some("CACHE"), true);
             fs::remove_dir_all(&pkg_path)?;
 
-            println!("[CACHE::INFO] Update cache registry");
             remove_entry_from_registry(pkg_name.clone(), &mut cindex);
         }
 
+        log_message(MessageType::Info("Update cache registry".to_string()), Some("CACHE"), true);
         println!("[CACHE::INFO] Update cache registry");
         write_internal_registry(&cache_index_path, cindex)?;
 
@@ -90,8 +102,7 @@ pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
 
     // cache list
     if list {
-        println!("[CACHE::INFO] Cache status:");
-        println!("");
+        log_message(MessageType::Info("Cache status:".to_string()), Some("CACHE"), true);
         for entry in fs::read_dir(cache_folder)? {
             let entry = entry?;
             let entry_path = entry.path();
@@ -133,17 +144,32 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
     if let Some(internal_version) = rvers {
         match compare_version(&internal_version, &mversion) {
             QueryVersion::Old | QueryVersion::Young => {
-                println!("[INSTALL::INFO] Remove module {}@{} previously added", name, mversion);
+                log_message(
+                    MessageType::Info(format!("Remove module {}@{} previously added", name, mversion)),
+                    Some("INSTALL"),
+                    true
+                );
+
                 uninstall_globally(name.clone(), force)?;
             },
             QueryVersion::Same => {
-                println!("[INSTALL::INFO] Module {}@{} already installed", name, mversion);
+                log_message(
+                    MessageType::Info(format!("Module {}@{} already installed", name, mversion)),
+                    Some("INSTALL"),
+                    true
+                );
+
                 return Ok(());
             }
         }
     }
 
-    println!("[INSTALL::INFO] Check and resolve dependencies...");
+    log_message(
+        MessageType::Info("Check and resolve dependencies...".to_string()),
+        Some("INSTALL"),
+        true
+    );
+
     let mut mindex = read_internal_registry(&modules_index, RegistryMode::ModulesMode)?;
     let mut cindex = read_internal_registry(&cache_index, RegistryMode::CacheMode)?;
     let mut visited = HashSet::new();
@@ -158,7 +184,12 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
         None
     )?;
 
-    println!("[INSTALL::INFO] Write module's registry");
+    log_message(
+        MessageType::Info("Write module's registry".to_string()),
+        Some("INSTALL"),
+        true
+    );
+
     write_internal_registry(&modules_index, mindex)?;
     write_internal_registry(&cache_index, cindex)?;
 
@@ -172,14 +203,29 @@ pub fn uninstall_globally(module: String, force: bool) -> Result<()> {
     let mut mindex = read_internal_registry(&mindex_path, RegistryMode::ModulesMode)?;
 
     let (name, _) = parse_module_name(&module);
-    println!("[UNINSTALL::INFO] Remove package {} from cs_modules folder", name);
+
+    log_message(
+        MessageType::Info(format!("Remove package {} from cs_modules folder", name)),
+        Some("UNINSTALL"),
+        true
+    );
+
+    log_message(
+        MessageType::Info(format!("Remove package {} dependencies", name)),
+        Some("UNINSTALL"),
+        true
+    );
 
     // delete from modules (also dependencies)
-    println!("[UNINSTALL::INFO] Remove package {} dependencies", name);
     remove_helper(&cs_modules_path, &name, force, &mut mindex, None)?;
 
     // update module's registry
-    println!("[UNINSTALL::INFO] Write module's registry");
+    log_message(
+        MessageType::Info("Write module's registry".to_string()),
+        Some("UNINSTALL"),
+        true
+    );
+
     write_internal_registry(&mindex_path, mindex)?;
 
     Ok(())
@@ -197,12 +243,33 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
             if let Some(rvers) = query_registry(&registry, &module) {
                 let latest_version = resolve_module_version(REMOTE_REGISTRY_INDEX, &module, Some(rvers.clone()))?;
                 match compare_version(&rvers, &latest_version) {
-                    QueryVersion::Young => println!("[UPGRADE::INFO] Module {} is up to date", &module),
-                    QueryVersion::Old => { to_update.insert(format!("{}@{}", module.clone(), latest_version)); },
-                    QueryVersion::Same => println!("[UPGRADE::INFO] Module {} already exists", &module),
+                    QueryVersion::Young => {
+                        log_message(
+                            MessageType::Info(format!("Module {} is up to date", &module)),
+                            Some("UPGRADE"),
+                            true
+                        );
+
+                    },
+                    QueryVersion::Old => {
+                        to_update.insert(format!("{}@{}", module.clone(), latest_version));
+                    },
+                    QueryVersion::Same => {
+                        log_message(
+                            MessageType::Info(format!("Module {} already exists", &module)),
+                            Some("UPGRADE"),
+                            true
+                        );
+
+                    }
                 }
             } else {
-                println!("[UPGRADE::INFO] Module {} does not exists in registry", &module);
+                log_message(
+                    MessageType::Warning(format!("Module {} does not exists in registry", &module)),
+                    Some("UPGRADE"),
+                    true
+                );
+
             }
         }
     } else {
@@ -210,13 +277,28 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
     }
 
     for entry in to_update.iter() {
-        println!("[UPGRADE::INFO] Check latest version for module {}", &entry);
+        log_message(
+            MessageType::Info(format!("Check latest version for module {}", &entry)),
+            Some("UPGRADE"),
+            true
+        );
+
         let (pkg_name, pkg_version) = parse_module_name(&entry);
 
-        println!("[UPGRADE::INFO] Remove module {}", &pkg_name);
+        log_message(
+            MessageType::Info(format!("Remove module {}", &pkg_name)),
+            Some("UPGRADE"),
+            true
+        );
+
         uninstall_globally(entry.clone(), force)?;
 
-        println!("[UPGRADE::INFO] Update module {} to {}", &pkg_name, &pkg_version);
+        log_message(
+            MessageType::Info(format!("Update module {} to {}", &pkg_name, &pkg_version)),
+            Some("UPGRADE"),
+            true
+        );
+
         install_globally(entry.clone(), force)?;
     }
 

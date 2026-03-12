@@ -7,6 +7,7 @@ pub mod utils;
 
 use clap::Parser;
 use cli::{ CsCli, CsCommands };
+use crate::utils::{ MessageType, log_message };
 use crate::glb_core::{
     get_cspm_version,
     search_package,
@@ -27,7 +28,8 @@ use prj_core::{
     reinstall_module,
     run_project,
     install_plugins,
-    validate_project
+    validate_project,
+    publish_module
 };
 
 fn main() {
@@ -40,168 +42,183 @@ fn main() {
         // init project_name [--m -module] [--p -project]
         CsCommands::Init { global, name, module_flag, project_flag } => {
             if name.is_empty() {
-                eprintln!("[ERROR] Missing project or module name!");
-                return;
+                log_message(MessageType::Error("Missing project or module name!".to_string()), None, true);
+                return
             }
 
             let mflag = if !(module_flag ^ project_flag) || !module_flag { false } else { true };
             match mflag {
-                false => println!("[INFO] Create new project: {name}"),
-                true => println!("[INFO] Create new module: {name}")
+                false => {
+                    log_message(MessageType::Info(format!("Creating new project: {}", name)), None, true);
+                },
+                true => {
+                    log_message(MessageType::Info(format!("Creating new module: {}", name)), None, true);
+                }
             }
 
             if let Err(e) = create_project(name, mflag, global) {
-                eprintln!("[ERROR] Something went wrong while creating project folder: {e}");
-                return;
+                log_message(MessageType::Error(format!("Failes to create the project folder: {}", e)), None, true);
+                return
             }
         },
         // add module[@version]
         CsCommands::Add { module, force } => {
-            println!("[INFO] Check new module {:?}", module);
+            log_message(MessageType::Info(format!("Check new module {:?}", module)), None, true);
             for module_name in module.iter() {
                 let msplit: Vec<&str> = module_name.split('@').collect();
                 if msplit.len() > 2 || msplit.len() <= 0 {
-                    eprintln!("[ERROR] Bad module name syntax. Specify <module_name@version> or <module_name>");
-                    return;
+                    log_message(MessageType::Error("Bad module name syntax. Specify <module_name@version> or <module_name>".to_string()), None, true);
+                    return
                 }
                 let mname = msplit[0].to_string();
                 let version: Option<String> = if msplit.len() == 2 { Some(msplit[1].to_string()) } else { None };
                 if let Err(e) = add_package(&mname.clone(), version.clone(), force) {
-                    eprintln!("[ERROR] An error occurred while adding the package: {e}");
-                    return;
+                    log_message(MessageType::Error(format!("Failed to add the module: {}", e)), None, true);
+                    return
                 }
             }
         },
         // reinstall module
         CsCommands::Reinstall { module, force } => {
-            println!("[INFO] Reinstall modules {:?}", module);
+            log_message(MessageType::Info("Reinstall module".to_string()), None, true);
             if let Err(e) = reinstall_module(module, force) {
-                eprintln!("[ERROR] An error occurred while removing the package: {e}");
-                return;
+                log_message(MessageType::Error(format!("Failed to reinstall the module the module: {}", e)), None, true);
+                return
             }
         },
         // remove module
         CsCommands::Remove { module, force } => {
-            println!("[INFO] Removed module {:?}", module);
+            log_message(MessageType::Info("Remove module".to_string()), None, true);
             for module_name in module.iter() {
                 if let Err(e) = remove_package(&module_name, force) {
-                    eprintln!("[ERROR] An error occurred while removing the package: {e}");
-                    return;
+                    log_message(MessageType::Error(format!("Failed to remove the module: {}", e)), None, true);
+                    return
                 }
             }
         },
         // update module
         CsCommands::Update { module, force } => {
-            println!("[INFO] Update the project's dependencies {:?}", module);
+            log_message(MessageType::Info("Update project dependencies".to_string()), None, true);
             if let Err(e) = update_package(module, force) {
-                eprintln!("[ERROR] An error occurred while updating the package: {e}");
-                return;
+                log_message(MessageType::Error(format!("Failed to update the module: {}", e)), None, true);
+                return
             }
         },
         // install modules globally
         CsCommands::Install { module, force } => {
-            println!("[INFO] Install modules globally");
+            log_message(MessageType::Info("Install module".to_string()), None, true);
             for m in module.iter() {
                 if let Err(e) = install_globally(m.clone(), force) {
-                    eprintln!("[ERROR] An error occurred while installing globally: {e}");
-                    return;
+                    log_message(MessageType::Error(format!("Failed to install the module: {}", e)), None, true);
+                    return
                 }
             }
         },
         // uninstall modules globally
         CsCommands::Uninstall { module, force } => {
-            println!("[INFO] Install modules globally");
+            log_message(MessageType::Info("Uninstall module".to_string()), None, true);
             for m in module {
                 if let Err(e) = uninstall_globally(m, force) {
-                    eprintln!("[ERROR] An error occurred while uninstalling globally: {e}");
-                    return;
+                    log_message(MessageType::Error(format!("Failed to uninstall the module: {}", e)), None, true);
+                    return
                 }
             }
         },
         // upgrade modules globally
         CsCommands::Upgrade { module, force } => {
-            println!("[INFO] Upgrade modules globally");
+            log_message(MessageType::Info("Upgrade module".to_string()), None, true);
             if let Err(e) = upgrade_globally(module, force) {
-                eprintln!("[ERROR] An error occurred while upgrading globally: {e}");
-                return;
+                log_message(MessageType::Error(format!("Failed to upgrade the module: {}", e)), None, true);
+                return
             }
         },
         // manage cache
         CsCommands::Cache { clean, list } => {
-            println!("[INFO] Manage cspm cache");
+            log_message(MessageType::Info("Manage cspm cache".to_string()), None, true);
             if let Err(e) = manage_cache(clean, list) {
-                eprintln!("[ERROR] An error occurred during cache management: {e}");
-                return;
+                log_message(MessageType::Error(format!("Failed to manage the cache: {}", e)), None, true);
+                return
             }
         },
         // check the env dependencies
         CsCommands::Sync => {
+            log_message(MessageType::Info("Check project's environment status".to_string()), None, true);
             println!("[INFO] Check project's environment status");
             if let Err(e) = sync_project() {
-                eprintln!("[ERROR] An error occurred during sync: {e}");
-                return;
+                log_message(MessageType::Error(format!("Failed to sync the project: {}", e)), None, true);
+                return
             }
         },
         // build project from manifest or lock file
         CsCommands::Build { from_lock, global }=> {
             match from_lock {
                 true => {
-                    println!("[INFO] Read Cspm.lock file and build project");
+                    log_message(MessageType::Info("Read Cspm.lock file and build project".to_string()), None, true);
                     if let Err(e) = build_from_lock(global) {
-                        eprintln!("[ERROR] An error occurred building project from Cspm.toml file: {e}");
-                        return;
+                        log_message(MessageType::Error(format!("Failed to build the project from Cspm.lock file: {}", e)), None, true);
+                        return
                     }
                 },
                 false => {
-                    println!("[INFO] Read Cspm.toml file and build project");
+                    log_message(MessageType::Info("Read Cspm.toml file and build project".to_string()), None, true);
                     if let Err(e) = build_from_manifest(global) {
-                        eprintln!("[ERROR] An error occurred building project from Cspm.lock file: {e}");
-                        return;
+                        log_message(MessageType::Error(format!("Failed to build the project from Cspm.toml file: {}", e)), None, true);
+                        return
                     }
                 }
             }
         },
         // run csuound project
         CsCommands::Run { csoptions } => {
+            log_message(MessageType::Info("Run Csound project".to_string()), None, true);
             println!("[INFO] Run Csound project");
             if let Err(e) = run_project(&csoptions) {
-                eprintln!("[ERROR] An error occurred running project: {e}");
-                return;
+                log_message(MessageType::Error(format!("Failed to run the project: {}", e)), None, true);
+                return
             }
         },
         // run csuound project
         CsCommands::Validate => {
-            println!("[INFO] Check Cspm.toml file and fixes issues automatically");
+            log_message(MessageType::Info("Check Cspm.toml file and fixes issues automatically".to_string()), None, true);
             if let Err(e) = validate_project() {
-                eprintln!("[ERROR] An error occurred running project: {e}");
-                return;
+                log_message(MessageType::Error(format!("Failed to validate the project: {}", e)), None, true);
+                return
             }
         },
         // use risset for plugins installation
         CsCommands::Risset { rstoptions } => {
+            log_message(MessageType::Info("Install plugins using risset".to_string()), None, true);
             println!("[INFO] Install plugins using risset");
             if let Err(e) = install_plugins(&rstoptions) {
-                eprintln!("[ERROR] An error occurred installing plugins: {e}");
-                return;
+                log_message(MessageType::Error(format!("Failed to uninstall the module: {}", e)), None, true);
+                return
             }
         },
         // pack module for publish
         CsCommands::Publish => {
-            println!("[INFO] Publish Csound module")
+            log_message(MessageType::Info("Publish Csound module".to_string()), None, true);
+            if let Err(e) = publish_module() {
+                log_message(MessageType::Error(format!("Failed to prepare the module: {}", e)), None, true);
+                return
+            }
         },
         // display module info
         CsCommands::Search { module } => {
-            println!("[INFO] Display module info");
+            log_message(MessageType::Info("Display module info".to_string()), None, true);
             if let Err(e) = search_package(&module) {
-                eprintln!("[INFO] Something went wrong while searching package: {}", e);
+                log_message(MessageType::Error(format!("Failed to search the module: {}", e)), None, true);
                 return
             }
         },
         // display cspm version
         CsCommands::Version => {
             match get_cspm_version() {
-                Ok(version) => println!("[INFO] cspm: Csound Package Manager v{}", version),
-                Err(_) => eprintln!("[INFO] Something went wrong: version not found in manifest")
+                Ok(version) => {
+                    log_message(MessageType::Info(format!("cspm: Csound Package Manager v{}", version)), None, true);
+                },
+                Err(_) => {
+                    log_message(MessageType::Error("Version not found".to_string()), None, true);
+                }
             }
         }
     }

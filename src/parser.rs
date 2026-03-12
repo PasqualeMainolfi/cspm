@@ -9,6 +9,8 @@ use std::{
     path
 };
 
+use crate::utils::{ MessageType, log_message };
+
 
 #[derive(Serialize, Deserialize)]
 pub struct ProjectInfo {
@@ -87,36 +89,71 @@ impl MainEntry {
 
     pub fn get_entry_point(&self) -> Result<(String, String)> {
         if self.is_empty() {
-            return Err(anyhow::anyhow!("[RUN::ERROR] Main entry point is empty. Please specify the script entry point (.csd or .osc/.sco)"));
+            let mes_err = log_message(
+                MessageType::Error(
+                    "Main entry point is empty. Please specify the script entry point (.csd or .osc/.sco)".to_string()
+                ),
+                None,
+                false
+            );
+
+            return Err(anyhow::anyhow!(mes_err));
         }
 
         if self.csd.is_some() && self.orc.is_some() && self.sco.is_some() {
-            return Err(anyhow::anyhow!("[RUN::ERROR] Many entry point specified"));
+            let mes_err = log_message(MessageType::Error("Many entry point specified".to_string()), Some("RUN"), false);
+            return Err(anyhow::anyhow!(mes_err))
         }
 
         if self.csd.is_none() && (self.orc.is_none() || self.sco.is_none()) {
-            return Err(anyhow::anyhow!("[RUN::WARNING] Missing .orc or .sco entry point"));
+            let mes_err = log_message(MessageType::Error("Missing .orc or .sco entry point".to_string()), Some("RUN"), false);
+            return Err(anyhow::anyhow!(mes_err))
         }
 
         if self.csd.is_some() && (self.sco.is_some() || self.orc.is_some()) {
-            println!("[RUN::WARNING] Run .csd entry point. Specified .sco or .osc script will be ignored");
+            log_message(
+                MessageType::Warning(
+                    "Run .csd entry point. Specified .sco or .osc script will be ignored".to_string()
+                ),
+                Some("RUN"),
+                true
+            );
+
             return Ok((self.csd.clone().unwrap_or(String::new()), String::new()))
         }
 
         if self.orc.is_some() && self.sco.is_some() {
             let entry_point_orc = self.orc.clone().unwrap_or(String::new());
             let entry_point_sco = self.sco.clone().unwrap_or(String::new());
-            println!("[INFO] Run {} and {} entry point", entry_point_orc, entry_point_sco);
+
+            log_message(
+                MessageType::Info(format!("Run {} and {} entry point", entry_point_orc, entry_point_sco)),
+                Some("RUN"),
+                true
+            );
+
             return Ok((entry_point_orc, entry_point_sco))
         }
 
         if self.csd.is_some() {
             let entry_point_csd = self.csd.clone().unwrap_or(String::new());
-            println!("[INFO] Run {} entry point", entry_point_csd);
+
+            log_message(
+                MessageType::Info(format!("Run {} entry point", entry_point_csd)),
+                Some("RUN"),
+                true
+            );
+
             return Ok((entry_point_csd, String::new()))
         }
 
-        Err(anyhow::anyhow!("[RUN::ERROR] Something went wrong while runnning csound script"))
+        let mes_err = log_message(
+            MessageType::Error("Something went wrong while runnning csound script".to_string()),
+            Some("RUN"),
+            false
+        );
+
+        return Err(anyhow::anyhow!(mes_err))
     }
 }
 
@@ -208,7 +245,13 @@ pub fn computer_checksum(path_to_module: &path::Path) -> Result<String> {
 }
 
 pub fn resolve_module_version(url: &str, pname: &str, version: Option<String>) -> Result<String> {
-    println!("[RESOLVE_DEPS::INFO] Check for last available version");
+
+    log_message(
+        MessageType::Info("Check for last available version".to_string()),
+        Some("RESOLVE-DEPS"),
+        true
+    );
+
     let response = reqwest::blocking::get(url)?;
     let indexes: HashMap<String, RemoteRegistryIndex> = response.json()?;
 
@@ -218,7 +261,15 @@ pub fn resolve_module_version(url: &str, pname: &str, version: Option<String>) -
             if versions.contains(&passed_version) {
                 return Ok(passed_version.to_string())
             } else {
-                return Err(anyhow::anyhow!("[RESOLVE_DEPS::ERROR] Version {} for module {} does not exists", pname, passed_version))
+                let mes_err = log_message(
+                    MessageType::Error(
+                        format!("Version {} for module {} does not exists", pname, passed_version)
+                    ),
+                    Some("RESOLVE-DEPS"),
+                    false
+                );
+
+                return Err(anyhow::anyhow!(mes_err))
             }
         } else {
             if let Some(latest) = versions.last() {
@@ -227,7 +278,15 @@ pub fn resolve_module_version(url: &str, pname: &str, version: Option<String>) -
         }
     }
 
-    Err(anyhow::anyhow!("[ERROR] Package {} not found in registry", pname).into())
+    let mes_err = log_message(
+        MessageType::Error(
+            format!("Package {} not found in registry", pname)
+        ),
+        Some("RESOLVE-DEPS"),
+        false
+    );
+
+    return Err(anyhow::anyhow!(mes_err))
 }
 
 pub fn read_internal_registry(mod_registry_path: &path::Path, registry_mode: RegistryMode) -> Result<RegistryData> {
@@ -368,26 +427,49 @@ pub fn check_manifest_deps(modules_folder: &path::Path, manifest: &Manifest) -> 
                 for (d, v) in manifest.dependencies.iter() {
                     if let Some(rvers) = data.get(d) {
                         if v != rvers {
-                            return Err(anyhow::anyhow!(
-                                "[RUN::ERROR] The module {} declared in the Cspm.toml has a different version {} than the one installed {}",
-                                d, v, rvers
-                            ))
+
+                            let mes_err = log_message(
+                                MessageType::Error(
+                                    format!(
+                                        "The module {} declared in the Cspm.toml has a different version {} than the one installed {}",
+                                        d, v, rvers
+                                    )
+                                ),
+                                Some("RESOLVE-DEPS"),
+                                false
+                            );
+
+                            return Err(anyhow::anyhow!(mes_err))
                         }
                     } else {
-                        return Err(anyhow::anyhow!(
-                            "[RUN::ERROR] The module {}@{} declared in the Cspm.toml is not installed",
-                            d, v
-                        ))
+
+                        let mes_err = log_message(
+                            MessageType::Error(
+                                format!(
+                                    "The module {}@{} declared in the Cspm.toml is not installed",
+                                    d, v
+                                )
+                            ),
+                            Some("RESOLVE-DEPS"),
+                            false
+                        );
+
+                        return Err(anyhow::anyhow!(mes_err))
                     }
                 }
             }
             RegistryData::CacheRegistry(_) => { }
         }
     } else {
-        return Err(anyhow::anyhow!(
-            "[RUN::ERROR] Something went wrong reading internal module's regestry"
-        ))
-    };
+
+        let mes_err = log_message(
+            MessageType::Error("Something went wrong reading internal module's regestry".to_string()),
+            Some("RESOLVE-DEPS"),
+            false
+        );
+
+        return Err(anyhow::anyhow!(mes_err))
+    }
 
     Ok(())
 }
