@@ -12,7 +12,6 @@ pub struct CsCli {
 #[derive(Subcommand, Debug)]
 pub enum CsCommands {
     /// Create a new Csound project
-    #[command(short_flag = 'i', long_flag = "init")]
     Init {
 
         /// Install modules globally. Default = false
@@ -34,7 +33,6 @@ pub enum CsCommands {
     },
 
     /// Add dependencies to the project
-    #[command(short_flag = 'a', long_flag = "add")]
     Add {
         module: Vec<String>, // use @major.minor.patch to specify the version
 
@@ -44,7 +42,6 @@ pub enum CsCommands {
     },
 
     /// Install modules globally (without manifest)
-    #[command(long_flag = "install")]
     Install {
         module: Vec<String>, // use @major.minor.patch to specify the version
 
@@ -54,7 +51,6 @@ pub enum CsCommands {
     },
 
     /// Uninstall modules globally (without manifest)
-    #[command(long_flag = "uninstall")]
     Uninstall {
         module: Vec<String>, // use @major.minor.patch to specify the version
 
@@ -64,7 +60,6 @@ pub enum CsCommands {
     },
 
     /// Upgrade global modules (without manifest)
-    #[command(long_flag = "upgrade")]
     Upgrade {
         module: Option<Vec<String>>,
 
@@ -83,7 +78,6 @@ pub enum CsCommands {
     },
 
     /// Remove dependencies from the project
-    #[command(short_flag = 'r', long_flag = "remove")]
     Remove {
         module: Vec<String>,
 
@@ -93,7 +87,6 @@ pub enum CsCommands {
     },
 
     /// Update the project's dependencies
-    #[command(short_flag = 'u', long_flag = "update")]
     Update {
         module: Option<Vec<String>>,
 
@@ -104,7 +97,6 @@ pub enum CsCommands {
     },
 
     /// Manage cspm cache
-    #[command(short_flag = 'c', long_flag = "cache")]
     Cache {
 
         /// Clean cache
@@ -120,10 +112,9 @@ pub enum CsCommands {
     Sync,
 
     /// Build project from manifest or lock file
-    #[command(short_flag = 'b', long_flag = "build")]
     Build {
 
-        /// Build using globally installed modules
+        /// Build using globally installed modules. Default = false
         #[arg(short = 'g', long = "global")]
         global: bool,
 
@@ -133,11 +124,9 @@ pub enum CsCommands {
     },
 
     /// Publish Csound module
-    #[command(long_flag = "publish")]
     Publish,
 
     /// Run Csound project
-    #[command(long_flag = "run")]
     Run {
         /// Specify Csound build options
         #[arg(long = "csoptions", num_args = 0.., trailing_var_arg = true)]
