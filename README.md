@@ -91,7 +91,7 @@ Commands:
   cache                   Manage cspm cache
   sync                    Check the project's environment status
   build                   Build project from manifest or lock file
-  publish                 Publish Csound module
+  publish                 Validate module structure and metadata before creating a Pull Request
   run                     Run Csound project
   validate                Check Cspm.toml file and fixes issues automatically
   risset                  Install plugins using risset
