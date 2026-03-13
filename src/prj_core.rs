@@ -665,7 +665,7 @@ pub fn sync_project() -> Result<()> {
 
     for (d, v) in manifest_toml.dependencies.iter() {
         if let Some(pkg) = indexes.get(d) {
-            if let Some(latest) = pkg.version.last() {
+            if let Some(latest) = pkg.versions.last() {
                 if v == latest {
                     log_message(
                         MessageType::Info(format!("Module {} is up to date", d)),
@@ -1163,7 +1163,7 @@ pub fn publish_module() -> Result<()> {
     let remote_index: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index()?;
     if let Some(entry) = remote_index.get(&name) {
         if entry.authors != authors {
-            if entry.version.contains(&version) {
+            if entry.versions.contains(&version) {
                 log_message(
                     MessageType::Error("Module with same name but different authors already exists in registry".to_string()),
                     Some("PUBLISH"),
@@ -1174,7 +1174,7 @@ pub fn publish_module() -> Result<()> {
             }
         }
 
-        if entry.version.contains(&version) {
+        if entry.versions.contains(&version) {
             log_message(
                 MessageType::Warning(format!("Version {} already exists. This will be an update", version)),
                 Some("PUBLISH"),

@@ -220,7 +220,7 @@ pub enum RegistryData {
 
 #[derive(Serialize, Deserialize)]
 pub struct RemoteRegistryIndex {
-    pub version: Vec<String>,
+    pub versions: Vec<String>,
     pub authors: Vec<String>,
     pub description: String
 }
@@ -259,7 +259,7 @@ pub fn resolve_module_version(pname: &str, version: Option<String>) -> Result<St
     let indexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index()?;
 
     if let Some(index) = indexes.get(pname) {
-        let versions = &index.version;
+        let versions = &index.versions;
         if let Some(passed_version) = version {
             if versions.contains(&passed_version) {
                 return Ok(passed_version.to_string())

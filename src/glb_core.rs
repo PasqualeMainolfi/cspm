@@ -49,7 +49,7 @@ pub fn search_package(module_name: &str) -> Result<()> {
             println!("***********************");
             println!("Module found:");
             println!("  Module name: {}", module_name);
-            println!("  Available versions: {:?}", pkg.version);
+            println!("  Available versions: {:?}", pkg.versions);
             println!("  Description: {}", pkg.description);
             println!("***********************");
         },
