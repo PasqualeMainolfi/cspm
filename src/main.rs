@@ -143,7 +143,6 @@ fn main() {
         // check the env dependencies
         CsCommands::Sync => {
             log_message(MessageType::Info("Check project's environment status".to_string()), None, true);
-            println!("[INFO] Check project's environment status");
             if let Err(e) = sync_project() {
                 log_message(MessageType::Error(format!("Failed to sync the project: {}", e)), None, true);
                 return
@@ -171,7 +170,6 @@ fn main() {
         // run csuound project
         CsCommands::Run { csoptions } => {
             log_message(MessageType::Info("Run Csound project".to_string()), None, true);
-            println!("[INFO] Run Csound project");
             if let Err(e) = run_project(&csoptions) {
                 log_message(MessageType::Error(format!("Failed to run the project: {}", e)), None, true);
                 return
@@ -188,7 +186,6 @@ fn main() {
         // use risset for plugins installation
         CsCommands::Risset { rstoptions } => {
             log_message(MessageType::Info("Install plugins using risset".to_string()), None, true);
-            println!("[INFO] Install plugins using risset");
             if let Err(e) = install_plugins(&rstoptions) {
                 log_message(MessageType::Error(format!("Failed to uninstall the module: {}", e)), None, true);
                 return

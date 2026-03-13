@@ -154,7 +154,6 @@ pub fn check_risset() -> Result<()> {
             },
             "windows" => {
                 log_message(MessageType::Info("Install uv".to_string()), Some("RISSET"), true);
-                println!("[RISSET::INFO] Install uv");
                 process::Command::new("powershell")
                     .args(["-ExecutionPolicy", "ByPass"])
                     .args(["-c", "irm https://astral.sh/uv/install.ps1", "|", "iex"])

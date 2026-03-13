@@ -750,7 +750,12 @@ pub fn build_from_manifest(global: bool) -> Result<()> { // add plugins installa
     for (name, version) in manifest.dependencies.iter() {
         let mversion = resolve_module_version(name, Some(version.clone()))?;
 
-        println!("[BUILD::INFO] Check and resolve dependencies...");
+        log_message(
+            MessageType::Info("Check and resolve dependencies...".to_string()),
+            Some("BUILD"),
+            true
+        );
+
         resolve_dependencies(
             &cache_folder,
             &modules_folder,
@@ -1068,7 +1073,13 @@ pub fn install_plugins(rstoptions: &Vec<String>) -> Result<()> {
             let manifest_path = proot.join(MANIFEST_FILE);
             let lockfile_path = proot.join(LOCK_FILE);
             if manifest_path.exists() && manifest_path.is_file() {
-                println!("[RISSET::INFO] Update Cspm.toml");
+
+                log_message(
+                    MessageType::Info("Update Cspm.toml".to_string()),
+                    Some("RISSET"),
+                    true
+                );
+
                 let mut mtoml = Manifest::open_toml(&manifest_path)?;
                 mtoml.plugins.extend(to_add.clone());
                 mtoml.plugins.retain(|plug| !to_remove.contains(plug));

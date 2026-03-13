@@ -88,7 +88,6 @@ pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
         }
 
         log_message(MessageType::Info("Update cache registry".to_string()), Some("CACHE"), true);
-        println!("[CACHE::INFO] Update cache registry");
         write_internal_registry(&cache_index_path, cindex)?;
 
         return Ok(())
