@@ -177,7 +177,7 @@ fn main() {
                 return
             }
         },
-        // run csuound project
+        // validate project
         CsCommands::Validate => {
             log_message(MessageType::Info("Check Cspm.toml file and fixes issues automatically".to_string()), None, true);
             if let Err(e) = validate_project() {
@@ -194,11 +194,11 @@ fn main() {
                 return
             }
         },
-        // pack module for publish
+        // validate module structure and metadata before creating a pull request
         CsCommands::Publish => {
-            log_message(MessageType::Info("Publish Csound module".to_string()), None, true);
+            log_message(MessageType::Info("Validate module structure and metadata before creating a Pull Request".to_string()), None, true);
             if let Err(e) = publish_module() {
-                log_message(MessageType::Error(format!("Failed to prepare the module: {}", e)), None, true);
+                log_message(MessageType::Error(format!("Failed to validatee: {}", e)), None, true);
                 return
             }
         },

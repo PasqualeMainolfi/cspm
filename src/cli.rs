@@ -123,7 +123,7 @@ pub enum CsCommands {
         from_lock: bool
     },
 
-    /// Publish Csound module
+    /// Validate module structure and metadata before creating a Pull Request
     Publish,
 
     /// Run Csound project
