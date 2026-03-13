@@ -1,9 +1,10 @@
-use flate2::read::GzDecoder;
-use tar::Archive;
 use anyhow::Result;
 use colored::*;
-use::std::{ path, process, env };
-
+use::std::{ fs, path, process, env, collections::HashMap };
+use crate::parser::{ RemoteRegistryIndex, GitHubItem };
+use crate::paths::{
+    REMOTE_REGISTRY_INDEX
+};
 
 pub enum MessageType {
     Info(String),
@@ -36,33 +37,82 @@ pub fn log_message(mtype: MessageType, context: Option<&str>, display: bool) -> 
     return m;
 }
 
-pub fn download_package(registry: &str, pname: &str, version: &str, cache_path: &path::Path, dest_path: &path::Path) -> Result<()> {
-    let url = format!("{}/{}-{}.tar.gz", registry, pname, version); // should be tar.gz
+pub fn fetch_remote_registry_index() -> Result<HashMap<String, RemoteRegistryIndex>> {
+    let client = reqwest::blocking::Client::new();
+    let response = client
+       .get(REMOTE_REGISTRY_INDEX)
+       .header("User-Agent", "cspm")
+       .send()?
+       .error_for_status()?;
+
+    let rjson: HashMap<String, RemoteRegistryIndex> = response.json()?;
+    Ok(rjson)
+}
+
+fn download_from_remote_registry(url: &str, destination: &path::Path) -> Result<()> {
+     let client = reqwest::blocking::Client::new();
+     let response: Vec<GitHubItem> = client
+        .get(url)
+        .header("User-Agent", "cspm")
+        .send()?
+        .error_for_status()?
+        .json()?;
+
+     fs::create_dir_all(destination)?;
+
+     for item in response {
+         let item_destination = destination.join(item.name.clone());
+         match item.r#type.as_str() {
+             "file" => {
+                 if let Some(down_url) = item.download_url {
+                     let bytes_response = client
+                         .get(down_url)
+                         .header("User-Agent", "cspm")
+                         .send()?
+                         .error_for_status()?
+                         .bytes()?;
+
+                     fs::write(item_destination, &bytes_response)?;
+                 }
+             },
+             "dir" => {
+                 let sub_url = format!("{}/{}", url, item.name);
+                 download_from_remote_registry(&sub_url, &item_destination)?;
+             }
+             _ => { continue }
+         }
+     }
+
+     Ok(())
+}
+
+pub fn download_package(
+    remote_registry_url: &str,
+    pname: &str,
+    version: &str,
+    cache_path: &path::Path,
+    dest_path: &path::Path
+) -> Result<()>
+{
+    let remote_module_url = format!("{}/{}/{}", remote_registry_url, pname, version);
 
     log_message(
-        MessageType::Info(format!("Download package {} from {}", pname, registry)),
+        MessageType::Info(format!("Download module {} from {}", pname, remote_registry_url)),
         Some("DOWNLOAD"),
         true
     );
 
-    let mut response = reqwest::blocking::get(&url)?;
-    let temp_file_path = cache_path.join(format!("{}_temp.tar.gz", pname));
+    let destination = cache_path.join(dest_path);
+    if let Err(e) = download_from_remote_registry(&remote_module_url, &destination) {
+        let mes_err = log_message(
+            MessageType::Error(format!("Failed to download module: {}", e)),
+            Some("DOWNLOAD"),
+            false
+        );
 
-    {
-        let mut temp_file = std::fs::File::create(&temp_file_path)?;
-        std::io::copy(&mut response, &mut temp_file)?;
+        return Err(anyhow::anyhow!(mes_err))
     }
 
-    log_message(MessageType::Info("Unpack module".to_string()), Some("DOWNLOAD"), true);
-
-    let tar_gz = std::fs::File::open(&temp_file_path)?;
-    let decoder = GzDecoder::new(&tar_gz);
-    let mut archive = Archive::new(decoder);
-    archive.unpack(cache_path.join(dest_path))?;
-
-    log_message(MessageType::Info("Remove downloaded temp file".to_string()), Some("DOWNLOAD"), true);
-
-    std::fs::remove_file(&temp_file_path)?;
     Ok(())
 }
 

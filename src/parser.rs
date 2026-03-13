@@ -1,16 +1,20 @@
 use anyhow::Result;
 use serde::{ Deserialize, Serialize };
 use sha2::{ Sha256, Digest };
-use reqwest;
 use walkdir::WalkDir;
+use crate::utils::{ MessageType, log_message, fetch_remote_registry_index };
 use std::{
     collections::{ HashMap, HashSet },
     fs,
     path
 };
 
-use crate::utils::{ MessageType, log_message };
-
+#[derive(Serialize, Deserialize)]
+pub struct GitHubItem {
+    pub name: String,
+    pub r#type: String,
+    pub download_url: Option<String>
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct ProjectInfo {
@@ -244,7 +248,7 @@ pub fn computer_checksum(path_to_module: &path::Path) -> Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-pub fn resolve_module_version(url: &str, pname: &str, version: Option<String>) -> Result<String> {
+pub fn resolve_module_version(pname: &str, version: Option<String>) -> Result<String> {
 
     log_message(
         MessageType::Info("Check for last available version".to_string()),
@@ -252,8 +256,7 @@ pub fn resolve_module_version(url: &str, pname: &str, version: Option<String>) -
         true
     );
 
-    let response = reqwest::blocking::get(url)?;
-    let indexes: HashMap<String, RemoteRegistryIndex> = response.json()?;
+    let indexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index()?;
 
     if let Some(index) = indexes.get(pname) {
         let versions = &index.version;

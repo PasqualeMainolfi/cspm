@@ -17,8 +17,8 @@ pub const CS_MODULE_META: &str = "meta.json";
 pub const CS_MODULES_FOLDER: &str = "cs_modules";
 pub const CS_MODULES_INDEX: &str = ".cs_modules_index.json";
 
-pub const REMOTE_REGISTRY: &str = ""; // registry
-pub const REMOTE_REGISTRY_INDEX: &str = ""; // package indexes
+pub const REMOTE_REGISTRY: &str = "https://api.github.com/repos/PasqualeMainolfi/cs-modules/contents/modules";
+pub const REMOTE_REGISTRY_INDEX: &str = "https://raw.githubusercontent.com/PasqualeMainolfi/cs-modules/main/cs-registry.json"; // package indexes
 
 pub const LOCK_FILE: &str = "Cspm.lock";
 pub const MANIFEST_FILE: &str = "Cspm.toml";

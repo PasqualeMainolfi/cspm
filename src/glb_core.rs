@@ -1,14 +1,10 @@
 use anyhow::Result;
 use serde_json::Value;
-use std::{collections::{ HashSet, HashMap }, fs};
-use crate::utils::{ MessageType, log_message };
-
+use std::{ collections::{ HashSet, HashMap }, fs };
+use crate::utils::{ MessageType, log_message, fetch_remote_registry_index };
 use crate::{
     parser::QueryVersion,
-    prj_core::{
-        remove_helper,
-        resolve_dependencies
-    }
+    prj_core::{ remove_helper, resolve_dependencies }
 };
 
 use crate::parser::{
@@ -31,7 +27,6 @@ use crate::paths::{
     CS_CACHE_INDEX,
     CS_MODULES_FOLDER,
     CS_MODULES_INDEX,
-    REMOTE_REGISTRY_INDEX,
     MANIFEST_FILE,
     CSPM_MANIFEST,
     ProjectRootMode,
@@ -47,8 +42,7 @@ pub fn get_cspm_version() -> Result<String> {
 pub fn search_package(module_name: &str) -> Result<()> {
     log_message(MessageType::Info(format!("Search module: {}", module_name)), Some("SEARCH"), true);
 
-    let response = reqwest::blocking::get(REMOTE_REGISTRY_INDEX)?;
-    let indexes: HashMap<String, RemoteRegistryIndex> = response.json()?;
+    let indexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index()?;
 
     match indexes.get(module_name) {
         Some(pkg) => {
@@ -119,6 +113,7 @@ pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
         }
         println!("");
     }
+
     Ok(())
 }
 
@@ -138,7 +133,7 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
 
     let (name, version) = parse_module_name(&module);
     let version = if !version.is_empty() { Some(version) } else { None };
-    let mversion = resolve_module_version(REMOTE_REGISTRY_INDEX, &name, version)?;
+    let mversion = resolve_module_version(&name, version)?;
 
     let rvers = query_registry(&mindex_check, &name);
     if let Some(internal_version) = rvers {
@@ -241,7 +236,7 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
     if let Some(mods) = &modules {
         for module in mods.iter() {
             if let Some(rvers) = query_registry(&registry, &module) {
-                let latest_version = resolve_module_version(REMOTE_REGISTRY_INDEX, &module, Some(rvers.clone()))?;
+                let latest_version = resolve_module_version(&module, Some(rvers.clone()))?;
                 match compare_version(&rvers, &latest_version) {
                     QueryVersion::Young => {
                         log_message(

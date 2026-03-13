@@ -15,11 +15,12 @@ use std::{
 
 use crate::utils::{
     MessageType,
-    download_package,
-    run_csound_script,
     check_risset,
-    run_risset,
-    log_message
+    download_package,
+    fetch_remote_registry_index,
+    log_message,
+    run_csound_script,
+    run_risset
 };
 
 use crate::parser::{
@@ -33,6 +34,7 @@ use crate::parser::{
     RegistryData,
     RegistryMode,
     QueryVersion,
+    RemoteRegistryIndex,
     add_entry_to_registry,
     check_manifest_deps,
     computer_checksum,
@@ -57,7 +59,6 @@ use crate::paths::{
     CS_MODULE_META,
     CS_MODULES_FOLDER,
     REMOTE_REGISTRY,
-    REMOTE_REGISTRY_INDEX,
     CS_CACHE_INDEX,
     CS_MODULES_INDEX,
     ProjectRoots,
@@ -128,7 +129,7 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
     if !cache_folder.is_dir() { fs::create_dir_all(&cache_folder)?; }
     if !modules_folder.is_dir() { fs::create_dir_all(&modules_folder)?; }
 
-    let mversion = resolve_module_version(REMOTE_REGISTRY_INDEX, &name, version)?;
+    let mversion = resolve_module_version(&name, version)?;
     let manifest_toml = Manifest::open_toml(&roots.project_root.join(MANIFEST_FILE))?;
 
     if let Some(internal_version) = manifest_toml.dependencies.get(name) {
@@ -255,7 +256,6 @@ pub fn resolve_dependencies(
     let local_module = mfolder.join(&mname);
 
     let checksum: String;
-    let source = REMOTE_REGISTRY.to_string();
 
     let meta_name = format!(".{}@{}_{}", mname, version, CS_MODULE_META);
     let meta_file_path = cached_module.join(meta_name);
@@ -268,9 +268,9 @@ pub fn resolve_dependencies(
             true
         );
 
-        download_package(&source, mname, version, cfolder, &cached_module)?;
+        download_package(&REMOTE_REGISTRY, mname, version, cfolder, &cached_module)?;
         checksum = computer_checksum(&cached_module)?;
-        let cm = CacheMeta { source: source.clone(), checksum: checksum.clone() };
+        let cm = CacheMeta { source: REMOTE_REGISTRY.to_string(), checksum: checksum.clone() };
         let meta_json = serde_json::to_string_pretty(&cm)?;
         fs::write(meta_file_path, &meta_json)?;
         add_entry_to_registry(mname, version, cindex);
@@ -334,7 +334,7 @@ pub fn resolve_dependencies(
         lfile.package.push(LockChild {
             name: mname.to_string(),
             version: version.to_string(),
-            source,
+            source: REMOTE_REGISTRY.to_string(),
             checksum,
             dependencies: mod_manifest.dependencies
                 .iter()
@@ -572,7 +572,7 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
     if let Some(mods) = &modules {
         for module in mods.iter() {
             if let Some(rvers) = query_registry(&registry, &module) {
-                let latest_version = resolve_module_version(REMOTE_REGISTRY_INDEX, &module, Some(rvers.clone()))?;
+                let latest_version = resolve_module_version(&module, Some(rvers.clone()))?;
                 match compare_version(&rvers, &latest_version) {
                     QueryVersion::Young => {
                         log_message(
@@ -638,8 +638,7 @@ pub fn sync_project() -> Result<()> {
 
     let manifest_toml: Manifest = Manifest::open_toml(&roots.project_root.join(MANIFEST_FILE))?;
 
-    let response = reqwest::blocking::get(REMOTE_REGISTRY_INDEX)?;
-    let indexes: HashMap<String, Vec<String>> = response.json()?;
+    let indexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index()?;
 
     log_message(
         MessageType::Info("Check project's dependencies status".to_string()),
@@ -667,7 +666,7 @@ pub fn sync_project() -> Result<()> {
 
     for (d, v) in manifest_toml.dependencies.iter() {
         if let Some(pkg) = indexes.get(d) {
-            if let Some(latest) = pkg.last() {
+            if let Some(latest) = pkg.version.last() {
                 if v == latest {
                     log_message(
                         MessageType::Info(format!("Module {} is up to date", d)),
@@ -750,7 +749,7 @@ pub fn build_from_manifest(global: bool) -> Result<()> { // add plugins installa
     );
 
     for (name, version) in manifest.dependencies.iter() {
-        let mversion = resolve_module_version(REMOTE_REGISTRY_INDEX, name, Some(version.clone()))?;
+        let mversion = resolve_module_version(name, Some(version.clone()))?;
 
         println!("[BUILD::INFO] Check and resolve dependencies...");
         resolve_dependencies(
