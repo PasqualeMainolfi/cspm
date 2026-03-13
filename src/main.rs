@@ -195,7 +195,7 @@ fn main() {
         CsCommands::Publish => {
             log_message(MessageType::Info("Validate module structure and metadata before creating a Pull Request".to_string()), None, true);
             if let Err(e) = publish_module() {
-                log_message(MessageType::Error(format!("Failed to validatee: {}", e)), None, true);
+                log_message(MessageType::Error(format!("Failed to validate: {}", e)), None, true);
                 return
             }
         },

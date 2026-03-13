@@ -86,6 +86,8 @@ pub fn create_project(p_name: String, module_flag: bool, global: bool) -> Result
     let main_script = format!("{}{}", p_name, main_ext);
 
     // create manifest
+    log_message(MessageType::Info("Create Cspm.toml file".to_string()), Some("CREATE"), true);
+
     let manifest_file = p.join(MANIFEST_FILE);
     let mft = MainPackage { name: p_name, version: String::from("0.1.0"), ..Default::default() };
     let mut main_entry = MainEntry { src: DEFAULT_SRC_FOLDER.to_string(), ..Default::default() };
@@ -108,6 +110,7 @@ pub fn create_project(p_name: String, module_flag: bool, global: bool) -> Result
     Manifest::write_toml(&manifest_file, &manifest_init)?;
 
     // create main .csd or .udo file
+    log_message(MessageType::Info("Create src folder and entry point file".to_string()), Some("CREATE"), true);
     let src_file = p_src.join(main_script);
     fs::write(src_file, &main_template)?;
 
@@ -1268,35 +1271,36 @@ pub fn validate_project() -> Result<()> {
         true
     );
 
+    let mut empty_mfolder = false;
     if let Err(_) = roots.set_modules_root() {
-        let mes_err = log_message(
-            MessageType::Error("Modules folder not found".to_string()),
+        log_message(
+            MessageType::Warning("Modules folder not found".to_string()),
             Some("VALIDATE"),
-            false
+            true
         );
-
-        return Err(anyhow::anyhow!(mes_err))
+        empty_mfolder = true;
     }
 
     let mfolder = roots.modules_root.join(CS_MODULES_FOLDER);
-    if !mfolder.exists() || !mfolder.is_dir() {
-        let mes_err = log_message(
-            MessageType::Error("Modules folder not found".to_string()),
+    if !empty_mfolder {
+        if !mfolder.exists() || !mfolder.is_dir() {
+            log_message(
+                MessageType::Warning("Empty modules folder".to_string()),
+                Some("VALIDATE"),
+                true
+            );
+        }
+
+        log_message(
+            MessageType::Info("Check module's registry".to_string()),
             Some("VALIDATE"),
-            false
+            true
         );
 
-        return Err(anyhow::anyhow!(mes_err))
     }
 
-    log_message(
-        MessageType::Info("Check module's registry".to_string()),
-        Some("VALIDATE"),
-        true
-    );
-
     let mindex_path = mfolder.join(CS_MODULES_INDEX);
-    let mindex = read_internal_registry(&mindex_path, RegistryMode::ModulesMode)?;
+    let mindex = read_internal_registry(&mindex_path, RegistryMode::ModulesMode).ok();
 
     log_message(
         MessageType::Info("Check Cspm.toml file".to_string()),
@@ -1319,63 +1323,80 @@ pub fn validate_project() -> Result<()> {
     };
 
     let mut fix = false;
-    for (dep, ver) in mtoml.dependencies.iter() {
-        match mindex {
-            RegistryData::ModulesRegistry(ref data) => {
-                if let Some(version) = data.get(dep) {
-                    if version != ver {
+    if let Some(ref mregistry) = mindex {
+        for (dep, ver) in mtoml.dependencies.iter() {
+            match mregistry {
+                RegistryData::ModulesRegistry(data) => {
+                    if let Some(version) = data.get(dep) {
+                        if version != ver {
+                            log_message(
+                                MessageType::Warning(
+                                    format!(
+                                        "Module {}: declared version {} not found. Found version {}",
+                                        dep, ver, version
+                                    )
+                                ),
+                                Some("VALIDATE"),
+                                true
+                            );
+
+                            fix = true;
+                        }
+                    } else {
                         log_message(
-                            MessageType::Warning(
-                                format!(
-                                    "Module {}: declared version {} not found. Found version {}",
-                                    dep, ver, version
-                                )
-                            ),
+                            MessageType::Warning(format!("Module {} version {} not found", dep, ver)),
                             Some("VALIDATE"),
                             true
                         );
 
-                        fix = true;
+                        fix = true
                     }
-                } else {
-                    log_message(
-                        MessageType::Warning(format!("Module {} version {} not found", dep, ver)),
+                }
+                RegistryData::CacheRegistry(_) => {
+                    let mes_err = log_message(
+                        MessageType::Error("Module's registry corrupted".to_string()),
                         Some("VALIDATE"),
-                        true
+                        false
                     );
 
-                    fix = true
+                    return Err(anyhow::anyhow!(mes_err))
                 }
-            }
-            RegistryData::CacheRegistry(_) => {
-                let mes_err = log_message(
-                    MessageType::Error("Module's registry corrupted".to_string()),
-                    Some("VALIDATE"),
-                    false
-                );
-
-                return Err(anyhow::anyhow!(mes_err))
             }
         }
     }
 
     // rebuild
-    if fix {
+    if !mtoml.dependencies.is_empty() {
+        if fix || mindex.is_none() {
+            log_message(
+                MessageType::Info("Repair project dependencies".to_string()),
+                Some("VALIDATE"),
+                true
+            );
+
+            fs::remove_dir_all(&mfolder)?;
+            let lockfile = roots.project_root.join(LOCK_FILE);
+            if lockfile.exists() { fs::remove_file(lockfile)?; }
+            let pinfo = read_project_info()?;
+
+            log_message(
+                MessageType::Info("Rebuild project".to_string()),
+                Some("VALIDATE"),
+                true
+            );
+
+            build_from_manifest(pinfo.global_modules)?;
+        }
+    } else {
         log_message(
-            MessageType::Info("Repair project dependencies".to_string()),
+            MessageType::Info("No dependencies to check".to_string()),
             Some("VALIDATE"),
             true
         );
-
-        fs::remove_dir_all(&mfolder)?;
-        let lockfile = roots.project_root.join(LOCK_FILE);
-        if lockfile.exists() { fs::remove_file(lockfile)?; }
-        let pinfo = read_project_info()?;
-        build_from_manifest(pinfo.global_modules)?;
     }
 
     log_message(
-        MessageType::Info("The project is in healthy status".to_string()),
+        MessageType::Info("Now the project is in healthy status".to_string()),
         Some("VALIDATE"),
         true
     );
