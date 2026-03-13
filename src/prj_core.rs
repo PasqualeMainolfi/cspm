@@ -1,7 +1,6 @@
 use anyhow::Result;
-use tar::Builder;
 use serde_json;
-use flate2::{ write::GzEncoder, Compression };
+use colored::*;
 use fs_extra::dir::{ copy, CopyOptions };
 use std::{
     fs,
@@ -1132,70 +1131,119 @@ pub fn publish_module() -> Result<()> {
     let mtoml: Manifest = Manifest::open_toml(&mpath)?;
     let name = mtoml.package.name;
     let version = mtoml.package.version;
+    let authors = mtoml.package.authors;
     let include = mtoml.package.include;
+    let src_folder = mtoml.main.src;
 
-    let pkg_tar_name = format!("{}-{}.tar.gz", name, version);
-    let tar_path = prj_root.join(pkg_tar_name.clone());
+    let mut warnings = 0;
+    let mut errors = 0;
+
+    if !lpath.exists() {
+        log_message(MessageType::Warning("Cspm.lock file not found".to_string()), Some("PUBLISH"), true);
+        warnings += 1;
+    }
+
+    if name.is_empty() || version.is_empty() {
+        log_message(
+            MessageType::Error(
+                "Name, version and authors of the module must be specified in Cspm.toml file".to_string()
+            ),
+            Some("PUBLISH"),
+            true
+        );
+        errors += 1;
+    }
 
     log_message(
-        MessageType::Info(format!("Packing module {} version {}", name, version)),
+        MessageType::Info(format!("Check for remote registry conflicts for {}@{}", name, version)),
         Some("PUBLISH"),
         true
     );
 
+    let remote_index: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index()?;
+    if let Some(entry) = remote_index.get(&name) {
+        if entry.authors != authors {
+            if entry.version.contains(&version) {
+                log_message(
+                    MessageType::Error("Module with same name but different authors already exists in registry".to_string()),
+                    Some("PUBLISH"),
+                    true
+                );
 
-    let tar_file = fs::File::create(&tar_path)?;
-    let gz_encoder = GzEncoder::new(tar_file, Compression::default());
-    let mut builder = Builder::new(gz_encoder);
+                errors += 1;
+            }
+        }
 
-    builder.append_path_with_name(mpath, MANIFEST_FILE)?;
-    if lpath.exists() { builder.append_path_with_name(lpath, LOCK_FILE)?; }
+        if entry.version.contains(&version) {
+            log_message(
+                MessageType::Warning(format!("Version {} already exists. This will be an update", version)),
+                Some("PUBLISH"),
+                true
+            );
 
-    let src_folder = mtoml.main.src;
+            warnings += 1;
+        }
+    }
+
     let spath = prj_root.join(src_folder.clone());
-    if spath.exists() {
-        builder.append_dir_all(src_folder, &spath)?;
-    } else {
+    if !spath.exists() {
         log_message(
-            MessageType::Warning(format!("Source folder [{}] not found. Packing without it", src_folder)),
+            MessageType::Warning(format!("Source folder [{}] not found", src_folder)),
             Some("PUBLISH"),
             true
         );
+
+        warnings += 1;
     }
 
     for extra_file in include.iter() {
         let pfile = prj_root.join(extra_file);
-        if pfile.exists() && pfile != spath {
-            if pfile.is_file() {
-                builder.append_path_with_name(&pfile, extra_file)?;
-            } else {
-                builder.append_dir_all(&extra_file, pfile)?;
-            }
-        } else {
+        if !pfile.exists() && pfile == spath {
             log_message(
-                MessageType::Warning(
+                MessageType::Error(
                     format!(
-                        "Included {} not found. Packing without it.", pfile.to_string_lossy().to_string())
+                        "Included {} file in Cspm.toml not found", pfile.to_string_lossy().to_string())
                 ),
                 Some("PUBLISH"),
                 true
             );
+
+            warnings += 1;
         }
     }
 
-    builder.finish()?;
-
+    let warnings_string = format!("{} WARNINGS", warnings);
+    let errors_string = format!("{} ERRORS", warnings);
     log_message(
-        MessageType::Info("To publish your module to the official Cs-modules registry:".to_string()),
+        MessageType::Info(
+            format!("Check terminated with: {} and {}", warnings_string.yellow().bold(), errors_string.red().bold())
+        ),
         Some("PUBLISH"),
         true
     );
 
-    println!("  1. Go to https://github.com/csound/modules and click 'Fork'.");
-    println!("  2. Upload {} to your forked repository.", pkg_tar_name);
-    println!("  3. Add your module and version to the 'index.json' file.");
+    if errors >= 1 {
+        log_message(
+            MessageType::Info("Please fix the errors and check again".to_string()),
+            Some("PUBLISH"),
+            true
+        );
+
+        return  Ok(())
+    }
+
+    log_message(
+        MessageType::Info("Done. To publish your module to the official cs-modules registry:".to_string()),
+        Some("PUBLISH"),
+        true
+    );
+
+    println!("  1. Go to https://github.com/csound/modules and click 'Fork'");
+    println!("  2. Upload the module to your forked repository");
+    println!("  3. Add your module and version to the 'index.json' file");
     println!("  4. Open a Pull Request to the official repository.");
     println!("Once approved, your module will be available to everyone!");
+    println!("Read more about on official git hub repository");
 
     Ok(())
 }
