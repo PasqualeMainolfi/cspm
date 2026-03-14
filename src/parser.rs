@@ -2,12 +2,10 @@ use anyhow::Result;
 use serde::{ Deserialize, Serialize };
 use sha2::{ Sha256, Digest };
 use walkdir::WalkDir;
+use colored::*;
+use crate::{ colored_name, colored_version, colored_name_version };
 use crate::utils::{ MessageType, log_message, fetch_remote_registry_index };
-use std::{
-    collections::{ HashMap, HashSet },
-    fs,
-    path
-};
+use std::{ collections::{ HashMap, HashSet }, fs, path };
 
 #[derive(Serialize, Deserialize)]
 pub struct GitHubItem {
@@ -31,10 +29,10 @@ pub trait ManageToml {
 pub struct LockFile {
     pub version: u32,
 
-    #[serde(rename = "package", skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, rename = "package", skip_serializing_if = "Vec::is_empty")]
     pub package: Vec<LockChild>,
 
-    #[serde(rename = "plugins", skip_serializing_if = "HashSet::is_empty")]
+    #[serde(default, rename = "plugins", skip_serializing_if = "HashSet::is_empty")]
     pub plugins: HashSet<String>
 }
 
@@ -220,8 +218,13 @@ pub enum RegistryData {
 
 #[derive(Serialize, Deserialize)]
 pub struct RemoteRegistryIndex {
+    #[serde(default)]
     pub versions: Vec<String>,
+
+    #[serde(default)]
     pub authors: Vec<String>,
+
+    #[serde(default)]
     pub description: String
 }
 
@@ -266,7 +269,7 @@ pub fn resolve_module_version(pname: &str, version: Option<String>) -> Result<St
             } else {
                 let mes_err = log_message(
                     MessageType::Error(
-                        format!("Version {} for module {} does not exists", pname, passed_version)
+                        format!("Version {} for module {} does not exists", colored_name!(pname), colored_version!(passed_version))
                     ),
                     Some("RESOLVE-DEPS"),
                     false
@@ -283,7 +286,7 @@ pub fn resolve_module_version(pname: &str, version: Option<String>) -> Result<St
 
     let mes_err = log_message(
         MessageType::Error(
-            format!("Package {} not found in registry", pname)
+            format!("Module {} not found in registry", colored_name!(pname))
         ),
         Some("RESOLVE-DEPS"),
         false
@@ -349,7 +352,7 @@ pub fn remove_entry_from_registry(entry_name: String, registry: &mut RegistryDat
         RegistryData::ModulesRegistry(map) => {
             let mut to_delete = false;
             if let Some(vers) = map.get_mut(&current_name) {
-                if vers == &current_version { to_delete = true; }
+                if vers == &current_version || current_version.is_empty() { to_delete = true; }
             }
             if to_delete { map.remove(&current_name); }
         }
@@ -435,7 +438,9 @@ pub fn check_manifest_deps(modules_folder: &path::Path, manifest: &Manifest) -> 
                                 MessageType::Error(
                                     format!(
                                         "The module {} declared in the Cspm.toml has a different version {} than the one installed {}",
-                                        d, v, rvers
+                                        colored_name!(d),
+                                        colored_version!(v),
+                                        colored_version!(rvers)
                                     )
                                 ),
                                 Some("RESOLVE-DEPS"),
@@ -449,8 +454,8 @@ pub fn check_manifest_deps(modules_folder: &path::Path, manifest: &Manifest) -> 
                         let mes_err = log_message(
                             MessageType::Error(
                                 format!(
-                                    "The module {}@{} declared in the Cspm.toml is not installed",
-                                    d, v
+                                    "The module {} declared in the Cspm.toml is not installed",
+                                    colored_name_version!(d, v)
                                 )
                             ),
                             Some("RESOLVE-DEPS"),

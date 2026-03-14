@@ -1,0 +1,1 @@
+- publish: remove cs_modules and .prj.json

@@ -4,6 +4,7 @@ pub mod paths;
 pub mod glb_core;
 pub mod prj_core;
 pub mod utils;
+pub mod macros;
 
 use clap::Parser;
 use cli::{ CsCli, CsCommands };
@@ -57,7 +58,7 @@ fn main() {
             }
 
             if let Err(e) = create_project(name, mflag, global) {
-                log_message(MessageType::Error(format!("Failes to create the project folder: {}", e)), None, true);
+                log_message(MessageType::Error(format!("Failes to create the project folder:\n{}", e)), None, true);
                 return
             }
         },
@@ -73,7 +74,7 @@ fn main() {
                 let mname = msplit[0].to_string();
                 let version: Option<String> = if msplit.len() == 2 { Some(msplit[1].to_string()) } else { None };
                 if let Err(e) = add_package(&mname.clone(), version.clone(), force) {
-                    log_message(MessageType::Error(format!("Failed to add the module: {}", e)), None, true);
+                    log_message(MessageType::Error(format!("Failed to add the module:\n{}", e)), None, true);
                     return
                 }
             }
@@ -82,7 +83,7 @@ fn main() {
         CsCommands::Reinstall { module, force } => {
             log_message(MessageType::Info("Reinstall module".to_string()), None, true);
             if let Err(e) = reinstall_module(module, force) {
-                log_message(MessageType::Error(format!("Failed to reinstall the module the module: {}", e)), None, true);
+                log_message(MessageType::Error(format!("Failed to reinstall the module the module:\n{}", e)), None, true);
                 return
             }
         },
@@ -91,7 +92,7 @@ fn main() {
             log_message(MessageType::Info("Remove module".to_string()), None, true);
             for module_name in module.iter() {
                 if let Err(e) = remove_package(&module_name, force) {
-                    log_message(MessageType::Error(format!("Failed to remove the module: {}", e)), None, true);
+                    log_message(MessageType::Error(format!("Failed to remove the module:\n{}", e)), None, true);
                     return
                 }
             }
@@ -100,7 +101,7 @@ fn main() {
         CsCommands::Update { module, force } => {
             log_message(MessageType::Info("Update project dependencies".to_string()), None, true);
             if let Err(e) = update_package(module, force) {
-                log_message(MessageType::Error(format!("Failed to update the module: {}", e)), None, true);
+                log_message(MessageType::Error(format!("Failed to update the module:\n{}", e)), None, true);
                 return
             }
         },
@@ -109,7 +110,7 @@ fn main() {
             log_message(MessageType::Info("Install module".to_string()), None, true);
             for m in module.iter() {
                 if let Err(e) = install_globally(m.clone(), force) {
-                    log_message(MessageType::Error(format!("Failed to install the module: {}", e)), None, true);
+                    log_message(MessageType::Error(format!("Failed to install the module:\n{}", e)), None, true);
                     return
                 }
             }
@@ -119,7 +120,7 @@ fn main() {
             log_message(MessageType::Info("Uninstall module".to_string()), None, true);
             for m in module {
                 if let Err(e) = uninstall_globally(m, force) {
-                    log_message(MessageType::Error(format!("Failed to uninstall the module: {}", e)), None, true);
+                    log_message(MessageType::Error(format!("Failed to uninstall the module:\n{}", e)), None, true);
                     return
                 }
             }
@@ -128,7 +129,7 @@ fn main() {
         CsCommands::Upgrade { module, force } => {
             log_message(MessageType::Info("Upgrade module".to_string()), None, true);
             if let Err(e) = upgrade_globally(module, force) {
-                log_message(MessageType::Error(format!("Failed to upgrade the module: {}", e)), None, true);
+                log_message(MessageType::Error(format!("Failed to upgrade the module:\n{}", e)), None, true);
                 return
             }
         },
@@ -136,7 +137,7 @@ fn main() {
         CsCommands::Cache { clean, list } => {
             log_message(MessageType::Info("Manage cspm cache".to_string()), None, true);
             if let Err(e) = manage_cache(clean, list) {
-                log_message(MessageType::Error(format!("Failed to manage the cache: {}", e)), None, true);
+                log_message(MessageType::Error(format!("Failed to manage the cache:\n{}", e)), None, true);
                 return
             }
         },
@@ -144,7 +145,7 @@ fn main() {
         CsCommands::Sync => {
             log_message(MessageType::Info("Check project's environment status".to_string()), None, true);
             if let Err(e) = sync_project() {
-                log_message(MessageType::Error(format!("Failed to sync the project: {}", e)), None, true);
+                log_message(MessageType::Error(format!("Failed to sync the project:\n{}", e)), None, true);
                 return
             }
         },
@@ -154,14 +155,14 @@ fn main() {
                 true => {
                     log_message(MessageType::Info("Read Cspm.lock file and build project".to_string()), None, true);
                     if let Err(e) = build_from_lock(global) {
-                        log_message(MessageType::Error(format!("Failed to build the project from Cspm.lock file: {}", e)), None, true);
+                        log_message(MessageType::Error(format!("Failed to build the project from Cspm.lock file:\n{}", e)), None, true);
                         return
                     }
                 },
                 false => {
                     log_message(MessageType::Info("Read Cspm.toml file and build project".to_string()), None, true);
                     if let Err(e) = build_from_manifest(global) {
-                        log_message(MessageType::Error(format!("Failed to build the project from Cspm.toml file: {}", e)), None, true);
+                        log_message(MessageType::Error(format!("Failed to build the project from Cspm.toml file:\n{}", e)), None, true);
                         return
                     }
                 }
@@ -171,7 +172,7 @@ fn main() {
         CsCommands::Run { csoptions } => {
             log_message(MessageType::Info("Run Csound project".to_string()), None, true);
             if let Err(e) = run_project(&csoptions) {
-                log_message(MessageType::Error(format!("Failed to run the project: {}", e)), None, true);
+                log_message(MessageType::Error(format!("Failed to run the project:\n{}", e)), None, true);
                 return
             }
         },
@@ -179,7 +180,7 @@ fn main() {
         CsCommands::Validate => {
             log_message(MessageType::Info("Check Cspm.toml file and fixes issues automatically".to_string()), None, true);
             if let Err(e) = validate_project() {
-                log_message(MessageType::Error(format!("Failed to validate the project: {}", e)), None, true);
+                log_message(MessageType::Error(format!("Failed to validate the project:\n{}", e)), None, true);
                 return
             }
         },
@@ -187,7 +188,7 @@ fn main() {
         CsCommands::Risset { rstoptions } => {
             log_message(MessageType::Info("Install plugins using risset".to_string()), None, true);
             if let Err(e) = install_plugins(&rstoptions) {
-                log_message(MessageType::Error(format!("Failed to uninstall the module: {}", e)), None, true);
+                log_message(MessageType::Error(format!("Failed to uninstall the module:\n{}", e)), None, true);
                 return
             }
         },
@@ -195,7 +196,7 @@ fn main() {
         CsCommands::Publish => {
             log_message(MessageType::Info("Validate module structure and metadata before creating a Pull Request".to_string()), None, true);
             if let Err(e) = publish_module() {
-                log_message(MessageType::Error(format!("Failed to validate: {}", e)), None, true);
+                log_message(MessageType::Error(format!("Failed to validate:\n{}", e)), None, true);
                 return
             }
         },
@@ -203,7 +204,7 @@ fn main() {
         CsCommands::Search { module } => {
             log_message(MessageType::Info("Display module info".to_string()), None, true);
             if let Err(e) = search_package(&module) {
-                log_message(MessageType::Error(format!("Failed to search the module: {}", e)), None, true);
+                log_message(MessageType::Error(format!("Failed to search the module:\n{}", e)), None, true);
                 return
             }
         },

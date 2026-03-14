@@ -1,10 +1,16 @@
 use anyhow::Result;
 use serde_json::Value;
+use colored::*;
 use std::{ collections::{ HashSet, HashMap }, fs };
 use crate::utils::{ MessageType, log_message, fetch_remote_registry_index };
 use crate::{
     parser::QueryVersion,
     prj_core::{ remove_helper, resolve_dependencies }
+};
+use crate::{
+    colored_name,
+    colored_name_version,
+    colored_version
 };
 
 use crate::parser::{
@@ -40,7 +46,7 @@ pub fn get_cspm_version() -> Result<String> {
 }
 
 pub fn search_package(module_name: &str) -> Result<()> {
-    log_message(MessageType::Info(format!("Search module: {}", module_name)), Some("SEARCH"), true);
+    log_message(MessageType::Info(format!("Search module: {}", colored_name!(module_name))), Some("SEARCH"), true);
 
     let indexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index()?;
 
@@ -54,7 +60,11 @@ pub fn search_package(module_name: &str) -> Result<()> {
             println!("***********************");
         },
         None => {
-            log_message(MessageType::Warning(format!("Package {} not found in registry", module_name)), Some("SEARCH"), true);
+            log_message(
+                MessageType::Warning(format!("Module {} not found in registry", colored_name!(module_name))),
+                Some("SEARCH"),
+                true
+            );
         }
     }
 
@@ -81,7 +91,7 @@ pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
             let pkg_path = entry.path();
             let pkg_name = entry.file_name().to_string_lossy().to_string();
 
-            log_message(MessageType::Info(format!("Remove package {} from cache", pkg_name)), Some("CACHE"), true);
+            log_message(MessageType::Info(format!("Remove module {} from cache", colored_name!(pkg_name))), Some("CACHE"), true);
             fs::remove_dir_all(&pkg_path)?;
 
             remove_entry_from_registry(pkg_name.clone(), &mut cindex);
@@ -103,10 +113,10 @@ pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
             let pname = entry_manifest.package.name;
             let pversion = entry_manifest.package.version;
             let pdeps = entry_manifest.dependencies;
-            let deps_format: String = pdeps.iter().map(|(d, v)| format!("{}@{}", d, v)).collect::<Vec<String>>().join(", ");
+            let deps_format: String = pdeps.iter().map(|(d, v)| colored_name_version!(d, v)).collect::<Vec<String>>().join(", ");
 
             println!("***********************");
-            println!("> Module: {}@{}", pname, pversion);
+            println!("> Module: {}", colored_name_version!(pname, pversion));
             println!("> Module dependencies: [{}]", deps_format);
             println!("***********************");
         }
@@ -139,7 +149,7 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
         match compare_version(&internal_version, &mversion) {
             QueryVersion::Old | QueryVersion::Young => {
                 log_message(
-                    MessageType::Info(format!("Remove module {}@{} previously added", name, mversion)),
+                    MessageType::Info(format!("Remove module {} previously added", colored_name_version!(name, mversion))),
                     Some("INSTALL"),
                     true
                 );
@@ -148,7 +158,7 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
             },
             QueryVersion::Same => {
                 log_message(
-                    MessageType::Info(format!("Module {}@{} already installed", name, mversion)),
+                    MessageType::Info(format!("Module {} already installed", colored_name_version!(name, mversion))),
                     Some("INSTALL"),
                     true
                 );
@@ -199,13 +209,13 @@ pub fn uninstall_globally(module: String, force: bool) -> Result<()> {
     let (name, _) = parse_module_name(&module);
 
     log_message(
-        MessageType::Info(format!("Remove package {} from cs_modules folder", name)),
+        MessageType::Info(format!("Remove module {} from cs_modules folder", colored_name!(name))),
         Some("UNINSTALL"),
         true
     );
 
     log_message(
-        MessageType::Info(format!("Remove package {} dependencies", name)),
+        MessageType::Info(format!("Remove module {} dependencies", colored_name!(name))),
         Some("UNINSTALL"),
         true
     );
@@ -239,7 +249,7 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
                 match compare_version(&rvers, &latest_version) {
                     QueryVersion::Young => {
                         log_message(
-                            MessageType::Info(format!("Module {} is up to date", &module)),
+                            MessageType::Info(format!("Module {} is up to date", colored_name!(module))),
                             Some("UPGRADE"),
                             true
                         );
@@ -250,7 +260,7 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
                     },
                     QueryVersion::Same => {
                         log_message(
-                            MessageType::Info(format!("Module {} already exists", &module)),
+                            MessageType::Info(format!("Module {} already exists", colored_name!(module))),
                             Some("UPGRADE"),
                             true
                         );
@@ -259,7 +269,7 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
                 }
             } else {
                 log_message(
-                    MessageType::Warning(format!("Module {} does not exists in registry", &module)),
+                    MessageType::Warning(format!("Module {} does not exists in registry", colored_name!(module))),
                     Some("UPGRADE"),
                     true
                 );
@@ -272,7 +282,7 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
 
     for entry in to_update.iter() {
         log_message(
-            MessageType::Info(format!("Check latest version for module {}", &entry)),
+            MessageType::Info(format!("Check latest version for module {}", colored_name!(entry))),
             Some("UPGRADE"),
             true
         );
@@ -280,7 +290,7 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
         let (pkg_name, pkg_version) = parse_module_name(&entry);
 
         log_message(
-            MessageType::Info(format!("Remove module {}", &pkg_name)),
+            MessageType::Info(format!("Remove module {}", colored_name!(pkg_name))),
             Some("UPGRADE"),
             true
         );
@@ -288,7 +298,7 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
         uninstall_globally(entry.clone(), force)?;
 
         log_message(
-            MessageType::Info(format!("Update module {} to {}", &pkg_name, &pkg_version)),
+            MessageType::Info(format!("Update module {} to {}", colored_name!(pkg_name), colored_version!(pkg_version))),
             Some("UPGRADE"),
             true
         );

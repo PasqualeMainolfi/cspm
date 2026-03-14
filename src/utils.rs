@@ -1,6 +1,7 @@
 use anyhow::Result;
 use colored::*;
 use::std::{ fs, path, process, env, collections::HashMap };
+use crate::colored_name;
 use crate::parser::{ RemoteRegistryIndex, GitHubItem };
 use crate::paths::{
     REMOTE_REGISTRY_INDEX
@@ -79,7 +80,7 @@ fn download_from_remote_registry(url: &str, destination: &path::Path) -> Result<
                  let sub_url = format!("{}/{}", url, item.name);
                  download_from_remote_registry(&sub_url, &item_destination)?;
              }
-             _ => { continue }
+             _ => continue
          }
      }
 
@@ -97,7 +98,7 @@ pub fn download_package(
     let remote_module_url = format!("{}/{}/{}", remote_registry_url, pname, version);
 
     log_message(
-        MessageType::Info(format!("Download module {} from {}", pname, remote_registry_url)),
+        MessageType::Info(format!("Download module {} from {}", colored_name!(pname), remote_registry_url)),
         Some("DOWNLOAD"),
         true
     );
@@ -105,7 +106,7 @@ pub fn download_package(
     let destination = cache_path.join(dest_path);
     if let Err(e) = download_from_remote_registry(&remote_module_url, &destination) {
         let mes_err = log_message(
-            MessageType::Error(format!("Failed to download module: {}", e)),
+            MessageType::Error(format!("Failed to download module:\n{}", e)),
             Some("DOWNLOAD"),
             false
         );
@@ -130,7 +131,7 @@ pub fn run_csound_script(entry_point: &(String, String), cs_options: &Vec<String
     let status = c.status()?;
     if !status.success() {
         let mes_err = log_message(
-            MessageType::Error(format!("Csound exited with non-zero status: {}", status)),
+            MessageType::Error(format!("Csound exited with non-zero status:\n{}", status)),
             Some("RUN"), false
         );
         return Err(anyhow::anyhow!(mes_err))
@@ -197,7 +198,7 @@ pub fn run_risset(rst_options: &Vec<String>) -> Result<()> {
     if !status.success() {
         let mes_err = log_message(
             MessageType::Error(
-                format!("Plugins installation exited with non-zero status: {}", status)
+                format!("Plugins installation exited with non-zero status:\n{}", status)
             ),
             Some("RISSET"),
             false

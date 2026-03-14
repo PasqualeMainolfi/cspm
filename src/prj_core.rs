@@ -12,6 +12,12 @@ use std::{
     },
 };
 
+use crate::{
+    colored_name,
+    colored_name_version,
+    colored_version
+};
+
 use crate::utils::{
     MessageType,
     check_risset,
@@ -138,7 +144,7 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
         match compare_version(&internal_version, &mversion) {
             QueryVersion::Old | QueryVersion::Young => {
                 log_message(
-                    MessageType::Info(format!("Remove module {}@{} previously added", name, mversion)),
+                    MessageType::Info(format!("Remove module {} previously added", colored_name_version!(name, mversion))),
                     Some("ADD"),
                     true
                 );
@@ -147,7 +153,7 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
             },
             QueryVersion::Same => {
                 log_message(
-                    MessageType::Info(format!("Module {}@{} already installed", name, mversion)),
+                    MessageType::Info(format!("Module {} already installed", colored_name_version!(name, mversion))),
                     Some("ADD"),
                     true
                 );
@@ -255,7 +261,7 @@ pub fn resolve_dependencies(
     if !visited.insert(pfull_name.clone()) { return Ok(()); }
 
     let cached_module = cfolder.join(&pfull_name);
-    let local_module = mfolder.join(&mname);
+    let local_module = mfolder.join(&pfull_name);
 
     let checksum: String;
 
@@ -265,7 +271,7 @@ pub fn resolve_dependencies(
     if !cached_module.exists() {
 
         log_message(
-            MessageType::Info(format!("Module {} not found in cache, downloading...", pfull_name)),
+            MessageType::Info(format!("Module {} not found in cache, downloading...", colored_name_version!(mname, version))),
             Some("RESOLVE-DEPS"),
             true
         );
@@ -290,8 +296,9 @@ pub fn resolve_dependencies(
                     let err_mes = log_message(
                         MessageType::Error(
                             format!(
-                                "Dependency conflict: {}@{} requested but {}@{} is already installed",
-                                mname, version, mname, v
+                                "Dependency conflict: {} requested but {} is already installed",
+                                colored_name_version!(mname, version),
+                                colored_name_version!(mname, v)
                             )
                         ),
                         Some("RESOLVE-DEPS"),
@@ -386,7 +393,7 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
     };
 
     log_message(
-        MessageType::Info(format!("Remove package {} from cs_modules folder", pname)),
+        MessageType::Info(format!("Remove module {} from cs_modules folder", colored_name!(pname))),
         Some("REMOVE"),
         true
     );
@@ -396,7 +403,7 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
         None => {
 
             log_message(
-                MessageType::Warning(format!("Undeclared module {} in Cspm.toml file", pname)),
+                MessageType::Warning(format!("Undeclared module {} in Cspm.toml file", colored_name!(pname))),
                 Some("REMOVE"),
                 true
             );
@@ -407,14 +414,35 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
 
     // delete from modules (also dependencies)
     log_message(
-        MessageType::Info(format!("Remove package {} dependencies", pname)),
+        MessageType::Info(format!("Remove module {} dependencies", colored_name!(pname))),
         Some("REMOVE"),
         true
     );
 
+    // check version if passed
+    let (_, check_version) = parse_module_name(pname);
+    if !check_version.is_empty() {
+        if &check_version != &manifest_toml.package.version {
+            let mes_err = log_message(
+                MessageType::Error(
+                    format!(
+                        "The provided version {} does not match the declared version {} in Cspm.toml",
+                        colored_name!(check_version),
+                        colored_version!(manifest_toml.package.version)
+                    )
+                ),
+                Some("REMOVE"),
+                true
+            );
+
+            return Err(anyhow::anyhow!(mes_err));
+        }
+    }
+
+    let pname_full = format!("{}@{}", pname, manifest_toml.package.version);
     let mindex_path = roots.modules_root.join(CS_MODULES_FOLDER).join(CS_MODULES_INDEX);
     let mut mindex = read_internal_registry(&mindex_path, RegistryMode::ModulesMode)?;
-    remove_helper(&cs_modules_path, &pname, force, &mut mindex, Some(&mut lockfile))?;
+    remove_helper(&cs_modules_path, &pname_full, force, &mut mindex, Some(&mut lockfile))?;
 
     // update module's registry
     log_message(
@@ -427,7 +455,7 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
 
     // delete from manifest
     log_message(
-        MessageType::Info(format!("Remove package {} from Cspm.toml file", pname)),
+        MessageType::Info(format!("Remove module {} from Cspm.toml file", colored_name!(pname))),
         Some("REMOVE"),
         true
     );
@@ -436,7 +464,7 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
 
     // update lockfile
     log_message(
-        MessageType::Info("Update Cspm.lock file".to_string()),
+        MessageType::Info("Update Cspm.toml and Cspm.lock file".to_string()),
         Some("REMOVE"),
         true
     );
@@ -453,7 +481,6 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
     });
 
     LockFile::write_toml(&lpath, &lockfile)?;
-
     Manifest::write_toml(&manifest_path, &manifest_toml)?;
     Ok(())
 }
@@ -495,7 +522,8 @@ pub fn remove_helper(
                         MessageType::Warning(
                             format!(
                                 "Module {} removal skipped because the module {} depends on it. Use [--force or -f] if you still want to delete",
-                                current, mtoml.package.name
+                                colored_name!(current),
+                                colored_name!(mtoml.package.name)
                             )
                         ),
                         Some("REMOVE"),
@@ -520,7 +548,7 @@ pub fn remove_helper(
 
             if pfolder.exists() {
 
-                log_message(MessageType::Info(format!("Remove package {}", current.to_string())),
+                log_message(MessageType::Info(format!("Remove module {}", colored_name!(current))),
                     Some("REMOVE"),
                     true
                 );
@@ -559,7 +587,7 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
 
                 let err_mes = log_message(
                     MessageType::Error(
-                        format!("UPDATE_MOD::[ERROR] Undeclared module {} in Cspm.toml file", module)
+                        format!("Undeclared module {} in Cspm.toml file", colored_name!(module))
                     ),
                     Some("UPDATE-MOD"),
                     false
@@ -578,15 +606,15 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
                 match compare_version(&rvers, &latest_version) {
                     QueryVersion::Young => {
                         log_message(
-                            MessageType::Info(format!("Module {} is up to date", &module)),
+                            MessageType::Info(format!("Module {} is up to date", colored_name!(module))),
                             Some("UPDATE"),
                             true
                         );
                     },
-                    QueryVersion::Old => { to_update.insert(format!("{}@{}", module.clone(), latest_version)); },
+                    QueryVersion::Old => { to_update.insert(colored_name_version!(module, latest_version)); },
                     QueryVersion::Same => {
                         log_message(
-                            MessageType::Info(format!("Module {} already exists", &module)),
+                            MessageType::Info(format!("Module {} already exists", colored_name!(module))),
                             Some("UPDATE"),
                             true
                         );
@@ -594,7 +622,7 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
                 }
             } else {
                 log_message(
-                    MessageType::Warning(format!("Module {} does not exists in registry", &module)),
+                    MessageType::Warning(format!("Module {} does not exists in registry", colored_name!(module))),
                     Some("UPDATE"),
                     true
                 );
@@ -608,7 +636,7 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
         let (pname, pversion) = parse_module_name(entry);
 
         log_message(
-            MessageType::Info(format!("Remove module {}@{}", &pname, &pversion)),
+            MessageType::Info(format!("Remove module {}", colored_name_version!(pname, pversion))),
             Some("UPDATE"),
             true
         );
@@ -616,7 +644,7 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
         remove_package(&pname, force)?;
 
         log_message(
-            MessageType::Info(format!("Update module {}@{}", &pname, &pversion)),
+            MessageType::Info(format!("Update module {}", colored_name_version!(pname, pversion))),
             Some("UPDATE"),
             true
         );
@@ -624,7 +652,7 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
         add_package(&pname, Some(pversion), force)?;
 
         log_message(
-            MessageType::Info(format!("Module {} is up to date", &pname)),
+            MessageType::Info(format!("Module {} is up to date", colored_name!(pname))),
             Some("UPDATE"),
             true
         );
@@ -671,27 +699,33 @@ pub fn sync_project() -> Result<()> {
             if let Some(latest) = pkg.versions.last() {
                 if v == latest {
                     log_message(
-                        MessageType::Info(format!("Module {} is up to date", d)),
+                        MessageType::Info(format!("Module {} is up to date", colored_name!(d))),
                         Some("SYNC"),
                         true
                     );
                 } else {
                     log_message(
-                        MessageType::Info(format!("Module {} is outdated. Latest available version: {}", d, latest)),
+                        MessageType::Info(
+                            format!(
+                                "Module {} is outdated. Latest available version: {}",
+                                colored_name!(d),
+                                colored_version!(latest)
+                            )
+                        ),
                         Some("SYNC"),
                         true
                     );
                 }
             } else {
                 log_message(
-                    MessageType::Error(format!("Module {}: no available versions are declared in remote registry", d)),
+                    MessageType::Error(format!("Module {}: no available versions are declared in remote registry", colored_name!(d))),
                     Some("SYNC"),
                     true
                 );
             }
         } else {
             log_message(
-                MessageType::Warning(format!("Module {} not found in remote registry", d)),
+                MessageType::Warning(format!("Module {} not found in remote registry", colored_name!(d))),
                 Some("SYNC"),
                 true
             );
@@ -706,7 +740,7 @@ pub fn sync_project() -> Result<()> {
 
         if !is_in {
             log_message(
-                MessageType::Warning(format!("Module {} declared in manifest but not available in project environment", d)),
+                MessageType::Warning(format!("Module {} declared in manifest but not available in project environment", colored_name!(d))),
                 Some("SYNC"),
                 true
             );
@@ -888,7 +922,9 @@ pub fn build_from_lock(global: bool) -> Result<()> {
 
         if !cached_module.exists() {
             log_message(
-                MessageType::Info(format!("Downloading exact version {}...", pfull_name)),
+                MessageType::Info(
+                    format!("Downloading exact version {}...", colored_name_version!(pkg.name, pkg.version))
+                ),
                 Some("BUILD"),
                 true
             );
@@ -899,8 +935,14 @@ pub fn build_from_lock(global: bool) -> Result<()> {
             if downloaded_checksum != pkg.checksum {
                 fs::remove_dir_all(&cached_module)?;
                 let mes_err = log_message(
-                    MessageType::Error(format!("Checksum mismatch for {}!\n> Expected: {}\n> Got: {}",
-                    pfull_name, pkg.checksum, downloaded_checksum)),
+                    MessageType::Error(
+                        format!(
+                            "Checksum mismatch for {}!\n> Expected: {}\n> Got: {}",
+                            colored_name_version!(pkg.name, pkg.version),
+                            pkg.checksum,
+                            downloaded_checksum
+                        )
+                    ),
                     Some("SECURITY"),
                     false
                 );
@@ -917,7 +959,9 @@ pub fn build_from_lock(global: bool) -> Result<()> {
 
         if !local_module.exists() {
             log_message(
-                MessageType::Info(format!("Extracting {} to cs_modules...", pfull_name)),
+                MessageType::Info(
+                    format!("Extracting {} to cs_modules...", colored_name_version!(pkg.name, pkg.version))
+                ),
                 Some("BUILD"),
                 true
             );
@@ -982,7 +1026,7 @@ pub fn build_from_lock(global: bool) -> Result<()> {
 pub fn reinstall_module(modules: Vec<String>, force: bool) -> Result<()> {
     for module in modules.iter() {
         log_message(
-            MessageType::Info(format!("Remove module {}", module)),
+            MessageType::Info(format!("Remove module {}", colored_name!(module))),
             Some("REINSTALL"),
             true
         );
@@ -990,7 +1034,7 @@ pub fn reinstall_module(modules: Vec<String>, force: bool) -> Result<()> {
         remove_package(&module, force)?;
 
         log_message(
-            MessageType::Info(format!("Reinstall module {}", module)),
+            MessageType::Info(format!("Reinstall module {}", colored_name!(module))),
             Some("REINSTALL"),
             true
         );
@@ -1157,7 +1201,7 @@ pub fn publish_module() -> Result<()> {
         warnings += 1;
     }
 
-    if name.is_empty() || version.is_empty() {
+    if name.is_empty() || version.is_empty() || authors.is_empty() {
         log_message(
             MessageType::Error(
                 "Name, version and authors of the module must be specified in Cspm.toml file".to_string()
@@ -1169,7 +1213,7 @@ pub fn publish_module() -> Result<()> {
     }
 
     log_message(
-        MessageType::Info(format!("Check for remote registry conflicts for {}@{}", name, version)),
+        MessageType::Info(format!("Check for remote registry conflicts for {}", colored_name_version!(name, version))),
         Some("PUBLISH"),
         true
     );
@@ -1190,7 +1234,7 @@ pub fn publish_module() -> Result<()> {
 
         if entry.versions.contains(&version) {
             log_message(
-                MessageType::Warning(format!("Version {} already exists. This will be an update", version)),
+                MessageType::Warning(format!("Version {} already exists. This will be an update", colored_version!(version))),
                 Some("PUBLISH"),
                 true
             );
@@ -1202,7 +1246,7 @@ pub fn publish_module() -> Result<()> {
     let spath = prj_root.join(src_folder.clone());
     if !spath.exists() {
         log_message(
-            MessageType::Warning(format!("Source folder [{}] not found", src_folder)),
+            MessageType::Warning(format!("Source folder {} not found", src_folder.bold())),
             Some("PUBLISH"),
             true
         );
@@ -1216,7 +1260,7 @@ pub fn publish_module() -> Result<()> {
             log_message(
                 MessageType::Error(
                     format!(
-                        "Included {} file in Cspm.toml not found", pfile.to_string_lossy().to_string())
+                        "Included {} file in Cspm.toml not found", (pfile.to_string_lossy().to_string()).bold())
                 ),
                 Some("PUBLISH"),
                 true
@@ -1227,7 +1271,7 @@ pub fn publish_module() -> Result<()> {
     }
 
     let warnings_string = format!("{} WARNINGS", warnings);
-    let errors_string = format!("{} ERRORS", warnings);
+    let errors_string = format!("{} ERRORS", errors);
     log_message(
         MessageType::Info(
             format!("Check terminated with: {} and {}", warnings_string.yellow().bold(), errors_string.red().bold())
@@ -1252,9 +1296,9 @@ pub fn publish_module() -> Result<()> {
         true
     );
 
-    println!("  1. Go to https://github.com/csound/modules and click 'Fork'");
+    println!("  1. Go to <https://github.com/PasqualeMainolfi/cs-modules> and click 'Fork'");
     println!("  2. Upload the module to your forked repository");
-    println!("  3. Add your module and version to the 'index.json' file");
+    println!("  3. Add your module and version to the [index.json] file");
     println!("  4. Open a Pull Request to the official repository.");
     println!("Once approved, your module will be available to everyone!");
     println!("Read more about on official git hub repository");
@@ -1313,7 +1357,7 @@ pub fn validate_project() -> Result<()> {
         Ok(mnf) => mnf,
         Err(e) => {
             let mes_err = log_message(
-                MessageType::Error(format!("Cspm.toml file not found: {}", e)),
+                MessageType::Error(format!("Cspm.toml file not found:\n{}", e)),
                 Some("VALIDATE"),
                 false
             );
@@ -1333,7 +1377,7 @@ pub fn validate_project() -> Result<()> {
                                 MessageType::Warning(
                                     format!(
                                         "Module {}: declared version {} not found. Found version {}",
-                                        dep, ver, version
+                                        colored_name!(dep), colored_version!(ver), colored_version!(version)
                                     )
                                 ),
                                 Some("VALIDATE"),
@@ -1344,7 +1388,7 @@ pub fn validate_project() -> Result<()> {
                         }
                     } else {
                         log_message(
-                            MessageType::Warning(format!("Module {} version {} not found", dep, ver)),
+                            MessageType::Warning(format!("Module {} not found", colored_name_version!(dep, ver))),
                             Some("VALIDATE"),
                             true
                         );

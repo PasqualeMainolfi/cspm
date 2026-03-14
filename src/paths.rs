@@ -10,7 +10,7 @@ pub const UDO_MAIN_TEMPLATE: &str = include_str!("../templates/main_template.udo
 
 pub const LOCK_VERSION: u32 = 1;
 
-pub const CS_MODULES_CACHE_FOLDER: &str = ".cs_modules_cache";
+pub const CS_MODULES_CACHE_FOLDER: &str = "cs_modules_cache";
 pub const CS_CACHE_INDEX: &str = ".cs_modules_cache_index.json";
 
 pub const CS_MODULE_META: &str = "meta.json";
