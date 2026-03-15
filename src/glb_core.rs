@@ -29,7 +29,7 @@ use crate::parser::{
     from_registry_to_list,
 };
 
-use crate::paths::{
+use crate::confres::{
     CS_MODULES_CACHE_FOLDER,
     CS_CACHE_INDEX,
     CS_MODULES_FOLDER,
@@ -63,7 +63,7 @@ pub fn search_package(module_name: &str) -> Result<()> {
         },
         None => {
             log_message(
-                MessageType::Warning(format!("Module {} not found in registry", colored_name!(module_name))),
+                MessageType::Warning(format!("Module {} not found in remote registry", colored_name!(module_name))),
                 Some("SEARCH"),
                 true
             );
@@ -196,7 +196,7 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
     )?;
 
     log_message(
-        MessageType::Info("Write module's registry".to_string()),
+        MessageType::Info("Write registry index".to_string()),
         Some("INSTALL"),
         true
     );
@@ -230,9 +230,9 @@ pub fn uninstall_globally(module: String, force: bool) -> Result<()> {
     // delete from modules (also dependencies)
     remove_helper(&cs_modules_path, &name, force, &mut mindex, None)?;
 
-    // update module's registry
+    // update registry index
     log_message(
-        MessageType::Info("Write module's registry".to_string()),
+        MessageType::Info("Write registry index".to_string()),
         Some("UNINSTALL"),
         true
     );

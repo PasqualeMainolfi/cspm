@@ -86,7 +86,7 @@ pub enum CsCommands {
         force: bool
     },
 
-    /// Update the project's dependencies
+    /// Update the project dependencies
     Update {
         module: Option<Vec<String>>,
 
@@ -108,7 +108,7 @@ pub enum CsCommands {
         list: bool
     },
 
-    /// Check the project's environment status
+    /// Check the project environment status
     Sync,
 
     /// Build project from manifest or lock file

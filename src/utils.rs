@@ -3,7 +3,7 @@ use colored::*;
 use::std::{ fs, path, process, env, collections::HashMap };
 use crate::colored_name;
 use crate::parser::{ RemoteRegistryIndex, GitHubItem };
-use crate::paths::{
+use crate::confres::{
     REMOTE_REGISTRY_INDEX
 };
 
@@ -157,7 +157,7 @@ pub fn check_risset() -> Result<()> {
                 log_message(MessageType::Info("Install uv".to_string()), Some("RISSET"), true);
                 process::Command::new("powershell")
                     .args(["-ExecutionPolicy", "ByPass"])
-                    .args(["-c", "irm https://astral.sh/uv/install.ps1", "|", "iex"])
+                    .args(["-c", "\"irm https://astral.sh/uv/install.ps1 | iex\""])
                     .status()?;
             },
             _ => {

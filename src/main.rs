@@ -1,6 +1,6 @@
 pub mod cli;
 pub mod parser;
-pub mod paths;
+pub mod confres;
 pub mod glb_core;
 pub mod prj_core;
 pub mod utils;
@@ -142,7 +142,7 @@ fn main() {
         },
         // check the env dependencies
         CsCommands::Sync => {
-            log_message(MessageType::Info("Check project's environment status".to_string()), None, true);
+            log_message(MessageType::Info("Check project environment status".to_string()), None, true);
             if let Err(e) = sync_project() {
                 log_message(MessageType::Error(format!("Failed to sync the project:\n{}", e)), None, true);
                 return
@@ -159,7 +159,7 @@ fn main() {
                     }
                 },
                 false => {
-                    log_message(MessageType::Info("Read Cspm.toml file and build project".to_string()), None, true);
+                    log_message(MessageType::Info("Read Cspm.toml file and build the project".to_string()), None, true);
                     if let Err(e) = build_from_manifest(global) {
                         log_message(MessageType::Error(format!("Failed to build the project from Cspm.toml file:\n{}", e)), None, true);
                         return

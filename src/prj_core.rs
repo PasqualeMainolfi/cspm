@@ -54,7 +54,7 @@ use crate::parser::{
     from_registry_to_list
 };
 
-use crate::paths::{
+use crate::confres::{
     CSD_MAIN_TEMPLATE,
     UDO_MAIN_TEMPLATE,
     LOCK_FILE,
@@ -198,7 +198,7 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
     )?;
 
     log_message(
-        MessageType::Info("Write module's registry".to_string()),
+        MessageType::Info("Write registry index".to_string()),
         Some("ADD"),
         true
     );
@@ -325,7 +325,7 @@ pub fn resolve_dependencies(
         copy(&cached_module, &local_module, &coptions)?;
 
         log_message(
-            MessageType::Info("Update module's registry".to_string()),
+            MessageType::Info("Update registry index".to_string()),
             Some("RESOLVE-DEPS"),
             true
         );
@@ -451,9 +451,9 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
     let mut mindex = read_internal_registry(&mindex_path, RegistryMode::ModulesMode)?;
     remove_helper(&cs_modules_path, &pname_full, force, &mut mindex, Some(&mut lockfile))?;
 
-    // update module's registry
+    // update registry index
     log_message(
-        MessageType::Info("Write module's registry".to_string()),
+        MessageType::Info("Write registry index".to_string()),
         Some("REMOVE"),
         true
     );
@@ -562,7 +562,7 @@ pub fn remove_helper(
 
                 fs::remove_dir_all(&pfolder)?;
 
-                log_message(MessageType::Info("Update project's modules registry".to_string()),
+                log_message(MessageType::Info("Update project registry index".to_string()),
                     Some("REMOVE"),
                     true
                 );
@@ -679,7 +679,7 @@ pub fn sync_project() -> Result<()> {
     let indexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index()?;
 
     log_message(
-        MessageType::Info("Check project's dependencies status".to_string()),
+        MessageType::Info("Check project dependencies status".to_string()),
         Some("SYNC"),
         true
     );
@@ -818,7 +818,7 @@ pub fn build_from_manifest(global: bool) -> Result<()> {
     }
 
     log_message(
-        MessageType::Info("Write module's registry".to_string()),
+        MessageType::Info("Write registry index".to_string()),
         Some("BUILD"),
         true
     );
@@ -997,7 +997,7 @@ pub fn build_from_lock(global: bool) -> Result<()> {
     }
 
     log_message(
-        MessageType::Info("Write module's registry".to_string()),
+        MessageType::Info("Write registry index".to_string()),
         Some("BUILD"),
         true
     );
@@ -1404,7 +1404,7 @@ pub fn validate_project() -> Result<()> {
         }
 
         log_message(
-            MessageType::Info("Check module's registry".to_string()),
+            MessageType::Info("Check registry index".to_string()),
             Some("VALIDATE"),
             true
         );
@@ -1466,7 +1466,7 @@ pub fn validate_project() -> Result<()> {
                 }
                 RegistryData::CacheRegistry(_) => {
                     let mes_err = log_message(
-                        MessageType::Error("Module's registry corrupted".to_string()),
+                        MessageType::Error("registry index corrupted".to_string()),
                         Some("VALIDATE"),
                         false
                     );

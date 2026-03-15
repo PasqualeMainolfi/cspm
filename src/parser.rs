@@ -166,7 +166,7 @@ impl MainEntry {
         }
 
         let mes_err = log_message(
-            MessageType::Error("Something went wrong while runnning csound script".to_string()),
+            MessageType::Error("Failed to run csound script".to_string()),
             Some("RUN"),
             false
         );
@@ -232,7 +232,7 @@ pub enum RegistryData {
     ModulesRegistry(HashMap<String, String>)
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct RemoteRegistryIndex {
     #[serde(default)]
     pub versions: Vec<String>,
@@ -302,7 +302,7 @@ pub fn resolve_module_version(pname: &str, version: Option<String>) -> Result<St
 
     let mes_err = log_message(
         MessageType::Error(
-            format!("Module {} not found in registry", colored_name!(pname))
+            format!("Module {} not found in remote registry", colored_name!(pname))
         ),
         Some("RESOLVE-DEPS"),
         false
@@ -515,7 +515,7 @@ pub fn check_manifest_deps(modules_folder: &path::Path, manifest: &Manifest) -> 
     } else {
 
         let mes_err = log_message(
-            MessageType::Error("Something went wrong reading internal module's regestry".to_string()),
+            MessageType::Error("Failed to read internal registry index".to_string()),
             Some("RESOLVE-DEPS"),
             false
         );
