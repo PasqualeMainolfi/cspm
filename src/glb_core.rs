@@ -4,9 +4,10 @@ use colored::*;
 use std::{ collections::{ HashSet, HashMap }, fs };
 use crate::utils::{ MessageType, log_message, fetch_remote_registry_index };
 use crate::{
-    parser::QueryVersion,
+    parser::VersionStatus,
     prj_core::{ remove_helper, resolve_dependencies }
 };
+
 use crate::{
     colored_name,
     colored_name_version,
@@ -18,6 +19,7 @@ use crate::parser::{
     RemoteRegistryIndex,
     Manifest,
     ManageToml,
+    Version,
     parse_module_name,
     query_registry,
     read_internal_registry,
@@ -25,7 +27,6 @@ use crate::parser::{
     write_internal_registry,
     remove_entry_from_registry,
     from_registry_to_list,
-    compare_version
 };
 
 use crate::paths::{
@@ -50,13 +51,14 @@ pub fn search_package(module_name: &str) -> Result<()> {
 
     let indexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index()?;
 
+    println!("RESULTS:");
     match indexes.get(module_name) {
         Some(pkg) => {
+            println!("");
             println!("***********************");
-            println!("Module found:");
-            println!("  Module name: {}", module_name);
-            println!("  Available versions: {:?}", pkg.versions);
-            println!("  Description: {}", pkg.description);
+            println!("Module name: {}", module_name);
+            println!("Available versions: {:?}", pkg.versions);
+            println!("Description: {}", pkg.description);
             println!("***********************");
         },
         None => {
@@ -109,16 +111,18 @@ pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
         for entry in fs::read_dir(cache_folder)? {
             let entry = entry?;
             let entry_path = entry.path();
-            let entry_manifest: Manifest = Manifest::open_toml(&entry_path.join(MANIFEST_FILE))?;
-            let pname = entry_manifest.package.name;
-            let pversion = entry_manifest.package.version;
-            let pdeps = entry_manifest.dependencies;
-            let deps_format: String = pdeps.iter().map(|(d, v)| colored_name_version!(d, v)).collect::<Vec<String>>().join(", ");
+            if entry_path.is_dir() {
+                let entry_manifest: Manifest = Manifest::open_toml(&entry_path.join(MANIFEST_FILE))?;
+                let pname = entry_manifest.package.name;
+                let pversion = entry_manifest.package.version;
+                let pdeps = entry_manifest.dependencies;
+                let deps_format: String = pdeps.iter().map(|(d, v)| colored_name_version!(d, v)).collect::<Vec<String>>().join(", ");
 
-            println!("***********************");
-            println!("> Module: {}", colored_name_version!(pname, pversion));
-            println!("> Module dependencies: [{}]", deps_format);
-            println!("***********************");
+                println!("***********************");
+                println!("> Module: {}", colored_name_version!(pname, pversion));
+                println!("> Module dependencies: [{}]", deps_format);
+                println!("***********************");
+            }
         }
         println!("");
     }
@@ -146,8 +150,11 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
 
     let rvers = query_registry(&mindex_check, &name);
     if let Some(internal_version) = rvers {
-        match compare_version(&internal_version, &mversion) {
-            QueryVersion::Old | QueryVersion::Young => {
+        let parsed_internal_version = Version::parse(&internal_version)?;
+        let parsed_mversion = Version::parse(&internal_version)?;
+
+        match parsed_internal_version.compare(&parsed_mversion) {
+            VersionStatus::Old | VersionStatus::Young => {
                 log_message(
                     MessageType::Info(format!("Remove module {} previously added", colored_name_version!(name, mversion))),
                     Some("INSTALL"),
@@ -156,7 +163,7 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
 
                 uninstall_globally(name.clone(), force)?;
             },
-            QueryVersion::Same => {
+            VersionStatus::Same => {
                 log_message(
                     MessageType::Info(format!("Module {} already installed", colored_name_version!(name, mversion))),
                     Some("INSTALL"),
@@ -245,9 +252,10 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
     if let Some(mods) = &modules {
         for module in mods.iter() {
             if let Some(rvers) = query_registry(&registry, &module) {
+                let parsed_registry_version = Version::parse(&rvers)?;
                 let latest_version = resolve_module_version(&module, Some(rvers.clone()))?;
-                match compare_version(&rvers, &latest_version) {
-                    QueryVersion::Young => {
+                match parsed_registry_version.compare(&Version::parse(&latest_version)?) {
+                    VersionStatus::Young => {
                         log_message(
                             MessageType::Info(format!("Module {} is up to date", colored_name!(module))),
                             Some("UPGRADE"),
@@ -255,10 +263,10 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
                         );
 
                     },
-                    QueryVersion::Old => {
+                    VersionStatus::Old => {
                         to_update.insert(format!("{}@{}", module.clone(), latest_version));
                     },
-                    QueryVersion::Same => {
+                    VersionStatus::Same => {
                         log_message(
                             MessageType::Info(format!("Module {} already exists", colored_name!(module))),
                             Some("UPGRADE"),

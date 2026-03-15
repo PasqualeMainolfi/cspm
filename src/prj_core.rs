@@ -38,8 +38,9 @@ use crate::parser::{
     Manifest,
     RegistryData,
     RegistryMode,
-    QueryVersion,
+    VersionStatus,
     RemoteRegistryIndex,
+    Version,
     add_entry_to_registry,
     check_manifest_deps,
     computer_checksum,
@@ -49,7 +50,6 @@ use crate::parser::{
     resolve_module_version,
     write_internal_registry,
     query_registry,
-    compare_version,
     from_registry_to_list
 };
 
@@ -141,8 +141,9 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
     let manifest_toml = Manifest::open_toml(&roots.project_root.join(MANIFEST_FILE))?;
 
     if let Some(internal_version) = manifest_toml.dependencies.get(name) {
-        match compare_version(&internal_version, &mversion) {
-            QueryVersion::Old | QueryVersion::Young => {
+        let parsed_internal_version = Version::parse(&internal_version)?;
+        match parsed_internal_version.compare(&Version::parse(&mversion)?) {
+            VersionStatus::Old | VersionStatus::Young => {
                 log_message(
                     MessageType::Info(format!("Remove module {} previously added", colored_name_version!(name, mversion))),
                     Some("ADD"),
@@ -151,7 +152,7 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
 
                 remove_package(name, force)?;
             },
-            QueryVersion::Same => {
+            VersionStatus::Same => {
                 log_message(
                     MessageType::Info(format!("Module {} already installed", colored_name_version!(name, mversion))),
                     Some("ADD"),
@@ -602,17 +603,18 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
     if let Some(mods) = &modules {
         for module in mods.iter() {
             if let Some(rvers) = query_registry(&registry, &module) {
+                let parsed_registry_version = Version::parse(&rvers)?;
                 let latest_version = resolve_module_version(&module, Some(rvers.clone()))?;
-                match compare_version(&rvers, &latest_version) {
-                    QueryVersion::Young => {
+                match parsed_registry_version.compare(&Version::parse(&latest_version)?) {
+                    VersionStatus::Young => {
                         log_message(
                             MessageType::Info(format!("Module {} is up to date", colored_name!(module))),
                             Some("UPDATE"),
                             true
                         );
                     },
-                    QueryVersion::Old => { to_update.insert(colored_name_version!(module, latest_version)); },
-                    QueryVersion::Same => {
+                    VersionStatus::Old => { to_update.insert(colored_name_version!(module, latest_version)); },
+                    VersionStatus::Same => {
                         log_message(
                             MessageType::Info(format!("Module {} already exists", colored_name!(module))),
                             Some("UPDATE"),
@@ -1201,6 +1203,7 @@ pub fn publish_module() -> Result<()> {
         warnings += 1;
     }
 
+
     if name.is_empty() || version.is_empty() || authors.is_empty() {
         log_message(
             MessageType::Error(
@@ -1211,6 +1214,9 @@ pub fn publish_module() -> Result<()> {
         );
         errors += 1;
     }
+
+    log_message(MessageType::Info("Check version format".to_string()), Some("PUBLISH"), true);
+    Version::parse(&version)?;
 
     log_message(
         MessageType::Info(format!("Check for remote registry conflicts for {}", colored_name_version!(name, version))),

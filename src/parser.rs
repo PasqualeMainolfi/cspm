@@ -380,31 +380,59 @@ pub fn add_entry_to_registry(entry_name: &str, entry_version: &str, registry: &m
     }
 }
 
-pub fn parse_version(version: &str) -> u32 {
-    let splitted_version: Vec<u32> = version
-        .split('.')
-        .filter_map(|c| c.parse::<u32>().ok())
-        .collect();
-
-    let mut sum = 0;
-    for (i, n) in splitted_version.iter().rev().enumerate() {
-        sum += n.pow(i as u32 + 1);
-    }
-    return sum
-}
-
-pub enum QueryVersion {
+pub enum VersionStatus {
     Same,
     Young,
     Old
 }
 
-pub fn compare_version(internal_version: &str, proposed_version: &str) -> QueryVersion {
-    let v1 = parse_version(internal_version);
-    let v2 = parse_version(proposed_version);
-    if v1 == v2 { return QueryVersion::Same }
-    if v1 < v2 { return QueryVersion::Old }
-    return QueryVersion::Young
+#[derive(Debug)]
+pub struct Version {
+    pub major: u32,
+    pub minor: u32,
+    pub patch: u32
+}
+
+impl Version {
+    pub fn parse(version: &str) -> Result<Version> {
+        let splitted_version = version
+            .split('.')
+            .map(|c| c.parse::<u32>())
+            .collect::<Result<Vec<_>, _>>();
+
+        match splitted_version {
+            Ok(vers) => {
+                Ok(Version { major: vers[0], minor: vers[1], patch: vers[2] })
+            },
+            Err(_) => {
+                let mes_err = log_message(
+                    MessageType::Error(
+                        "Invalid version. Version must be in numeric format [major.minor.patch]. Semantic version is not allowed".to_string()
+                    ),
+                    None,
+                    false
+                );
+
+                return Err(anyhow::anyhow!(mes_err));
+            }
+        }
+    }
+
+    pub fn compare(&self, other: &Version) -> VersionStatus {
+        if self.major > other.major { return VersionStatus::Young }
+        else if  self.major < other.major { return VersionStatus::Old }
+        else {
+            if self.minor > other.minor { return VersionStatus::Young }
+            else if self.minor < other.minor { return VersionStatus::Old }
+            else {
+                if self.patch > other.patch { return VersionStatus::Young }
+                else if self.patch < other.patch { return VersionStatus::Old }
+                else {
+                    return VersionStatus::Same
+                }
+            }
+        }
+    }
 }
 
 pub fn query_registry(registry: &RegistryData, pkg_name: &str) -> Option<String> {
