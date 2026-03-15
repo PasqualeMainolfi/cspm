@@ -3,8 +3,9 @@ use serde_json;
 use colored::*;
 use fs_extra::dir::{ copy, CopyOptions };
 use std::{
-    fs,
     path,
+    io::Write,
+    { fs, fs::OpenOptions },
     collections::{
         HashMap,
         HashSet,
@@ -15,7 +16,7 @@ use std::{
 use crate::{
     colored_name,
     colored_name_version,
-    colored_version
+    colored_version, parser::ProjectInfo
 };
 
 use crate::utils::{
@@ -66,11 +67,12 @@ use crate::paths::{
     REMOTE_REGISTRY,
     CS_CACHE_INDEX,
     CS_MODULES_INDEX,
+    PROJECT_INFO_FILE,
     ProjectRoots,
     ProjectRootMode,
     get_root,
     create_info_file,
-    read_project_info
+    create_gitignore_file
 };
 
 
@@ -119,6 +121,10 @@ pub fn create_project(p_name: String, module_flag: bool, global: bool) -> Result
     log_message(MessageType::Info("Create src folder and entry point file".to_string()), Some("CREATE"), true);
     let src_file = p_src.join(main_script);
     fs::write(src_file, &main_template)?;
+
+    // create .gitignore
+    log_message(MessageType::Info("Create .gitignore file".to_string()), Some("CREATE"), true);
+    create_gitignore_file(&p)?;
 
     Ok(())
 }
@@ -752,12 +758,16 @@ pub fn sync_project() -> Result<()> {
     Ok(())
 }
 
-pub fn build_from_manifest(global: bool) -> Result<()> { // add plugins installation from manifest when build. If not global in meta or meta does not exists spcify
+pub fn build_from_manifest(global: bool) -> Result<()> {
     let mut roots = ProjectRoots::new()?;
     let lpath = roots.project_root.join(LOCK_FILE);
 
     create_info_file(&roots.project_root, global)?;
     roots.set_modules_root()?;
+
+    // create .gitignore
+    log_message(MessageType::Info("Create .gitignore file".to_string()), Some("BUILD"), true);
+    create_gitignore_file(&roots.project_root)?;
 
     let cache_folder = roots.cache_root.join(CS_MODULES_CACHE_FOLDER);
     let cache_index = cache_folder.join(CS_CACHE_INDEX);
@@ -876,6 +886,10 @@ pub fn build_from_lock(global: bool) -> Result<()> {
 
     create_info_file(&roots.project_root, global)?;
     roots.set_modules_root()?;
+
+    // create .gitignore
+    log_message(MessageType::Info("Create .gitignore file".to_string()), Some("BUILD"), true);
+    create_gitignore_file(&roots.project_root)?;
 
     let mpath = roots.project_root.join(MANIFEST_FILE);
     let lpath = roots.project_root.join(LOCK_FILE);
@@ -1175,6 +1189,8 @@ pub fn publish_module() -> Result<()> {
     let prj_root = get_root(false, &ProjectRootMode::ProjectRoot)?;
     let mpath = prj_root.join(MANIFEST_FILE);
     let lpath = prj_root.join(LOCK_FILE);
+    let modules_folder = prj_root.join(CS_MODULES_FOLDER);
+    let prj_conf = prj_root.join(PROJECT_INFO_FILE);
 
     if !mpath.exists() {
         let mes_err = log_message(
@@ -1273,6 +1289,52 @@ pub fn publish_module() -> Result<()> {
             );
 
             warnings += 1;
+        }
+    }
+
+    if !prj_root.join(".gitignore").exists() {
+        log_message(
+            MessageType::Error(
+                ".gitignore file not found. Create it and add cs_modules and .config.toml to prevent them from being committed.".to_string()
+            ),
+            Some("PUBLISH"),
+            true
+        );
+
+        errors += 1;
+    } else {
+        let gitignore_content = fs::read_to_string(&prj_root.join(".gitignore"))?;
+        let text = gitignore_content
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with('#'))
+            .collect::<Vec<&str>>();
+
+        let has_csmod = text.iter().any(|l| *l == "cs_modules" || *l == "/cs_modules");
+        let has_prj = text.iter().any(|l| *l == ".config.toml");
+
+        if !has_csmod && modules_folder.exists() {
+            log_message(
+                MessageType::Error(
+                    "The cs_modules directory exists in this project. Add it to .gitignore".to_string()
+                ),
+                Some("PUBLISH"),
+                true
+            );
+
+            errors += 1;
+        }
+
+        if !has_prj && prj_conf.exists() {
+            log_message(
+                MessageType::Error(
+                    "The .config.toml file exists in this project. Add it to .gitignore".to_string()
+                ),
+                Some("PUBLISH"),
+                true
+            );
+
+            errors += 1;
         }
     }
 
@@ -1427,7 +1489,7 @@ pub fn validate_project() -> Result<()> {
             fs::remove_dir_all(&mfolder)?;
             let lockfile = roots.project_root.join(LOCK_FILE);
             if lockfile.exists() { fs::remove_file(lockfile)?; }
-            let pinfo = read_project_info()?;
+            let pinfo = ProjectInfo::open_toml(&roots.project_root.join(PROJECT_INFO_FILE))?;
 
             log_message(
                 MessageType::Info("Rebuild project".to_string()),
@@ -1443,6 +1505,64 @@ pub fn validate_project() -> Result<()> {
             Some("VALIDATE"),
             true
         );
+    }
+
+    let gitignore_path = roots.project_root.join(".gitignore");
+    if !gitignore_path.exists() {
+        log_message(
+            MessageType::Warning(
+                ".gitignore file not found. Creating...".to_string()
+            ),
+            Some("PUBLISH"),
+            true
+        );
+
+        create_gitignore_file(&roots.project_root)?;
+    } else {
+        let gitignore_content = fs::read_to_string(&gitignore_path)?;
+        let text = gitignore_content
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with('#'))
+            .collect::<Vec<&str>>();
+
+        let has_csmod = text.iter().any(|l| *l == "cs_modules" || *l == "/cs_modules");
+        let has_prj = text.iter().any(|l| *l == ".config.toml");
+
+        if !has_csmod && mfolder.exists() {
+            log_message(
+                MessageType::Warning(
+                    "The cs_modules directory exists in this project. Adding it to .gitignore".to_string()
+                ),
+                Some("PUBLISH"),
+                true
+            );
+
+            let mut gitig = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&gitignore_path)?;
+
+            writeln!(gitig, "cs_modules")?;
+        }
+
+        let pinfo_path = roots.project_root.join(&PROJECT_INFO_FILE);
+        if !has_prj && pinfo_path.exists() {
+            log_message(
+                MessageType::Error(
+                    "The .config.toml file exists in this project but not in .gitignore. Adding it to .gitignore".to_string()
+                ),
+                Some("PUBLISH"),
+                true
+            );
+
+            let mut gitig = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&gitignore_path)?;
+
+            writeln!(gitig, ".config.toml")?;
+        }
     }
 
     log_message(

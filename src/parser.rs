@@ -14,15 +14,31 @@ pub struct GitHubItem {
     pub download_url: Option<String>
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct ProjectInfo {
-    pub global_modules: bool
-}
-
 pub trait ManageToml {
     fn open_toml(mpath: &path::Path) -> Result<Self>
     where Self: Sized;
     fn write_toml(mpath: &path::Path, mtoml: &Self) -> Result<()>;
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ProjectInfo {
+    pub version: u32,
+    pub global_modules: bool
+}
+
+impl ManageToml for ProjectInfo {
+    fn open_toml(pinfo_path: &path::Path) -> Result<Self>
+    where Self: Sized {
+        let pinfo = fs::read_to_string(pinfo_path)?;
+        let ptoml: ProjectInfo = toml::from_str(&pinfo)?;
+        Ok(ptoml)
+    }
+
+    fn write_toml(pinfo_path: &path::Path, ptoml: &Self) -> Result<()> {
+        let ptoml= toml::to_string_pretty::<ProjectInfo>(&ptoml)?;
+        std::fs::write(pinfo_path, ptoml)?;
+        Ok(())
+    }
 }
 
 #[derive(Default, Serialize, Deserialize)]

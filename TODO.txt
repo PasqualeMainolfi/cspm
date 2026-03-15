@@ -1,1 +1,1 @@
-- publish: remove cs_modules and .prj.json
+- publish: remove cs_modules and config.toml

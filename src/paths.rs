@@ -1,14 +1,16 @@
 use directories::ProjectDirs;
 use anyhow::Result;
 use std::{ fs, path };
-use crate::parser::ProjectInfo;
+use crate::parser::{ ProjectInfo, ManageToml };
 use crate::utils::{ MessageType, log_message };
 
 pub const CSPM_MANIFEST: &str = include_str!("../Cargo.toml");
 pub const CSD_MAIN_TEMPLATE: &str = include_str!("../templates/main_template.csd");
 pub const UDO_MAIN_TEMPLATE: &str = include_str!("../templates/main_template.udo");
+pub const GITIGNORE_TEMPLATE: &str = include_str!("../templates/.gitignore");
 
 pub const LOCK_VERSION: u32 = 1;
+pub const CONFIG_VERSION: u32 = 1;
 
 pub const CS_MODULES_CACHE_FOLDER: &str = "cs_modules_cache";
 pub const CS_CACHE_INDEX: &str = ".cs_modules_cache_index.json";
@@ -24,7 +26,7 @@ pub const LOCK_FILE: &str = "Cspm.lock";
 pub const MANIFEST_FILE: &str = "Cspm.toml";
 pub const DEFAULT_SRC_FOLDER: &str = "src";
 
-pub const PROJECT_INFO_FILE: &str = ".prj.json";
+pub const PROJECT_INFO_FILE: &str = ".config.toml";
 
 #[derive(Debug)]
 pub enum ProjectRootMode {
@@ -89,7 +91,7 @@ impl ProjectRoots {
     }
 
     pub fn set_modules_root(&mut self) -> Result<()> {
-        let pinfo = read_project_info()?;
+        let pinfo = ProjectInfo::open_toml(&self.project_root.join(PROJECT_INFO_FILE))?;
         self.modules_root = get_root(pinfo.global_modules, &ProjectRootMode::ModulesRoot)?;
         Ok(())
     }
@@ -98,15 +100,15 @@ impl ProjectRoots {
 pub fn create_info_file(prj_root: &path::Path, global: bool) -> Result<()> {
     let prj_info_file = prj_root.join(PROJECT_INFO_FILE);
     if !prj_info_file.exists() { fs::File::create(&prj_info_file)?; }
-    let prj_info = ProjectInfo { global_modules: global };
-    let prj_json = serde_json::to_string_pretty::<ProjectInfo>(&prj_info)?;
-    fs::write(&prj_info_file, prj_json)?;
+    let prj_info = ProjectInfo { version: CONFIG_VERSION, global_modules: global };
+    let prj_toml = toml::to_string_pretty::<ProjectInfo>(&prj_info)?;
+    fs::write(&prj_info_file, prj_toml)?;
     Ok(())
 }
 
-pub fn read_project_info() -> Result<ProjectInfo> {
-    let root = get_root(false, &ProjectRootMode::ProjectRoot)?;
-    let pinfo = fs::read_to_string(root.join(PROJECT_INFO_FILE))?;
-    let pinfo_json: ProjectInfo = serde_json::from_str(&pinfo)?;
-    Ok(pinfo_json)
+pub fn create_gitignore_file(prj_root: &path::Path) -> Result<()> {
+    let gitignore_path = prj_root.join(".gitignore");
+    if !gitignore_path.exists() { fs::File::create(&gitignore_path)?; }
+    fs::write(&gitignore_path, GITIGNORE_TEMPLATE)?;
+    Ok(())
 }

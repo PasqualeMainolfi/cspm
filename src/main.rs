@@ -35,7 +35,6 @@ use prj_core::{
 
 fn main() {
     colored::control::set_override(true);
-    println!("Hello, from cspm!");
 
     let c = CsCli::parse();
 
