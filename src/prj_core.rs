@@ -16,63 +16,59 @@ use std::{
 use crate::{
     colored_name,
     colored_name_version,
-    colored_version, parser::ProjectInfo
+    colored_version
 };
 
-use crate::utils::{
-    MessageType,
-    check_risset,
-    download_package,
-    fetch_remote_registry_index,
-    log_message,
-    run_csound_script,
-    run_risset
-};
-
-use crate::parser::{
-    CacheMeta,
-    LockChild,
-    LockFile,
-    MainEntry,
-    MainPackage,
-    ManageToml,
-    Manifest,
-    RegistryData,
-    RegistryMode,
-    VersionStatus,
-    RemoteRegistryIndex,
-    Version,
-    add_entry_to_registry,
-    check_manifest_deps,
-    computer_checksum,
-    parse_module_name,
-    read_internal_registry,
-    remove_entry_from_registry,
-    resolve_module_version,
-    write_internal_registry,
-    query_registry,
-    from_registry_to_list
-};
-
-use crate::confres::{
-    CSD_MAIN_TEMPLATE,
-    UDO_MAIN_TEMPLATE,
-    LOCK_FILE,
-    LOCK_VERSION,
-    DEFAULT_SRC_FOLDER,
-    MANIFEST_FILE,
-    CS_MODULES_CACHE_FOLDER,
-    CS_MODULE_META,
-    CS_MODULES_FOLDER,
-    REMOTE_REGISTRY,
-    CS_CACHE_INDEX,
-    CS_MODULES_INDEX,
-    PROJECT_INFO_FILE,
-    ProjectRoots,
-    ProjectRootMode,
-    get_root,
-    create_info_file,
-    create_gitignore_file
+use crate::{
+    utils::{
+        MessageType,
+        check_risset,
+        download_package,
+        fetch_remote_registry_index,
+        log_message,
+        run_csound_script,
+        run_risset
+    },
+    parser::{
+        CacheMeta,
+        LockChild,
+        LockFile,
+        MainEntry,
+        MainPackage,
+        ManageToml,
+        Manifest,
+        RegistryData,
+        RegistryMode,
+        VersionStatus,
+        RemoteRegistryIndex,
+        Version,
+        Registry,
+        ProjectInfo,
+        check_manifest_deps,
+        compute_checksum,
+        parse_module_name,
+        resolve_module_version
+    },
+    confres::{
+        CSD_MAIN_TEMPLATE,
+        UDO_MAIN_TEMPLATE,
+        LOCK_FILE,
+        LOCK_VERSION,
+        DEFAULT_SRC_FOLDER,
+        MANIFEST_FILE,
+        CS_MODULES_CACHE_FOLDER,
+        CS_MODULE_META,
+        CS_MODULES_FOLDER,
+        REMOTE_REGISTRY,
+        CS_CACHE_INDEX,
+        CS_MODULES_INDEX,
+        PROJECT_INFO_FILE,
+        ProjectRoots,
+        ProjectRootMode,
+        get_root,
+        create_info_file,
+        create_gitignore_file
+    }
 };
 
 
@@ -183,8 +179,12 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
         true
     );
 
-    let mut mindex = read_internal_registry(&modules_index, RegistryMode::ModulesMode)?;
-    let mut cindex = read_internal_registry(&cache_index, RegistryMode::CacheMode)?;
+    let mut mindex = Registry::new(&modules_index, RegistryMode::ModulesMode);
+    let mut cindex = Registry::new(&cache_index, RegistryMode::CacheMode);
+
+    mindex.read_internal_registry()?;
+    cindex.read_internal_registry()?;
+
     let mut visited = HashSet::new();
     resolve_dependencies(
         &cache_folder,
@@ -203,8 +203,8 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
         true
     );
 
-    write_internal_registry(&modules_index, mindex)?;
-    write_internal_registry(&cache_index, cindex)?;
+    mindex.write_internal_registry()?;
+    cindex.write_internal_registry()?;
 
     log_message(
         MessageType::Info("Update Cspm.toml file".to_string()),
@@ -259,8 +259,8 @@ pub fn resolve_dependencies(
     mname: &str,
     version: &str,
     visited: &mut HashSet<String>,
-    mindex: &mut RegistryData,
-    cindex: &mut RegistryData,
+    mindex: &mut Registry,
+    cindex: &mut Registry,
     mut lockfile: Option<&mut LockFile>
 ) -> Result<()>
 {
@@ -284,39 +284,47 @@ pub fn resolve_dependencies(
         );
 
         download_package(&REMOTE_REGISTRY, mname, version, cfolder, &cached_module)?;
-        checksum = computer_checksum(&cached_module)?;
+        checksum = compute_checksum(&cached_module)?;
         let cm = CacheMeta { source: REMOTE_REGISTRY.to_string(), checksum: checksum.clone() };
         let meta_json = serde_json::to_string_pretty(&cm)?;
         fs::write(meta_file_path, &meta_json)?;
-        add_entry_to_registry(mname, version, cindex);
+        cindex.add_entry_to_registry(mname, version);
     } else {
         let meta_string = fs::read_to_string(meta_file_path)?;
         let meta_json: CacheMeta = serde_json::from_str(&meta_string)?;
         checksum = meta_json.checksum;
     }
 
-    match mindex {
-        RegistryData::ModulesRegistry(map) => {
-            if let Some(v) = map.get(mname) {
-                if v != &version {
+    if let Some(ref reg) = mindex.registry {
+        match reg {
+            RegistryData::ModulesRegistry(map) => {
+                if let Some(v) = map.get(mname) {
+                    if v != &version {
 
-                    let err_mes = log_message(
-                        MessageType::Error(
-                            format!(
-                                "Dependency conflict: {} requested but {} is already installed",
-                                colored_name_version!(mname, version),
-                                colored_name_version!(mname, v)
-                            )
-                        ),
-                        Some("RESOLVE-DEPS"),
-                        false
-                    );
+                        let err_mes = log_message(
+                            MessageType::Error(
+                                format!(
+                                    "Dependency conflict: {} requested but {} is already installed",
+                                    colored_name_version!(mname, version),
+                                    colored_name_version!(mname, v)
+                                )
+                            ),
+                            Some("RESOLVE-DEPS"),
+                            false
+                        );
 
-                    return Err(anyhow::anyhow!(err_mes))
+                        return Err(anyhow::anyhow!(err_mes))
+                    }
                 }
-            }
-        },
-        RegistryData::CacheRegistry(_) => { }
+            },
+            RegistryData::CacheRegistry(_) => { }
+        }
+    } else {
+        let err_mes = log_message(
+            MessageType::Error("Failed to read registry index".to_string()), Some("RESOLVE-DEPS"), false
+        );
+
+        return Err(anyhow::anyhow!(err_mes))
     }
 
     if !local_module.exists() {
@@ -330,7 +338,7 @@ pub fn resolve_dependencies(
             true
         );
 
-        add_entry_to_registry(mname, &version, mindex);
+        mindex.add_entry_to_registry(mname, &version);
     }
 
     // read manifest
@@ -448,7 +456,9 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
 
     let pname_full = format!("{}@{}", pname, manifest_toml.package.version);
     let mindex_path = roots.modules_root.join(CS_MODULES_FOLDER).join(CS_MODULES_INDEX);
-    let mut mindex = read_internal_registry(&mindex_path, RegistryMode::ModulesMode)?;
+    let mut mindex = Registry::new(&mindex_path, RegistryMode::ModulesMode);
+    mindex.read_internal_registry()?;
+
     remove_helper(&cs_modules_path, &pname_full, force, &mut mindex, Some(&mut lockfile))?;
 
     // update registry index
@@ -458,7 +468,7 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
         true
     );
 
-    write_internal_registry(&mindex_path, mindex)?;
+    mindex.write_internal_registry()?;
 
     // delete from manifest
     log_message(
@@ -496,7 +506,7 @@ pub fn remove_helper(
     cs_modules_path: &path::Path,
     pname: &str,
     force: bool,
-    mindex: &mut RegistryData,
+    mindex: &mut Registry,
     mut lockfile: Option<&mut LockFile>
 ) -> Result<()>
 {
@@ -548,8 +558,9 @@ pub fn remove_helper(
             let manifest_path = pfolder.join(MANIFEST_FILE);
             if manifest_path.exists() {
                 let mtoml = Manifest::open_toml(&manifest_path)?;
-                for dep in mtoml.dependencies.keys() {
-                    queue.push_back(dep.clone());
+                for (dep, ver) in mtoml.dependencies.iter() {
+                    let full_name = format!("{}@{}", dep, ver);
+                    queue.push_back(full_name);
                 }
             }
 
@@ -567,7 +578,7 @@ pub fn remove_helper(
                     true
                 );
 
-                remove_entry_from_registry(current.clone(), mindex);
+                mindex.remove_entry_from_registry(current.clone());
                 if let Some(lfile) = lockfile.as_mut() {
                     let (pkg_name, pkg_version) = parse_module_name(&current);
                     lfile.package.retain(|p| !(p.name == pkg_name && p.version == pkg_version));
@@ -583,7 +594,8 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
     let mut roots = ProjectRoots::new()?;
     roots.set_modules_root()?;
     let mindex_path = roots.modules_root.join(CS_MODULES_INDEX);
-    let registry = read_internal_registry(&mindex_path, RegistryMode::ModulesMode)?;
+    let mut registry = Registry::new(&mindex_path, RegistryMode::ModulesMode);
+    registry.read_internal_registry()?;
 
     let manifest = Manifest::open_toml(&roots.project_root.join(MANIFEST_FILE))?;
     let installed_modules = manifest.dependencies;
@@ -608,7 +620,7 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
     let mut to_update: HashSet<String> = HashSet::new();
     if let Some(mods) = &modules {
         for module in mods.iter() {
-            if let Some(rvers) = query_registry(&registry, &module) {
+            if let Some(rvers) = registry.query_registry(&module) {
                 let parsed_registry_version = Version::parse(&rvers)?;
                 let latest_version = resolve_module_version(&module, Some(rvers.clone()))?;
                 match parsed_registry_version.compare(&Version::parse(&latest_version)?) {
@@ -637,7 +649,7 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
             }
         }
     } else {
-        to_update = from_registry_to_list(&registry);
+        to_update = registry.from_registry_to_list();
     }
 
     for entry in to_update.iter() {
@@ -695,12 +707,9 @@ pub fn sync_project() -> Result<()> {
         return Ok(())
     }
 
-    let mregistry = read_internal_registry(
-        &roots.modules_root
-            .join(CS_MODULES_FOLDER)
-            .join(CS_MODULES_INDEX),
-        RegistryMode::ModulesMode
-    )?;
+    let mregistry_path = &roots.modules_root.join(CS_MODULES_FOLDER).join(CS_MODULES_INDEX);
+    let mut mregistry = Registry::new(&mregistry_path, RegistryMode::ModulesMode);
+    mregistry.read_internal_registry()?;
 
     for (d, v) in manifest_toml.dependencies.iter() {
         if let Some(pkg) = indexes.get(d) {
@@ -739,11 +748,16 @@ pub fn sync_project() -> Result<()> {
             );
         }
 
-        let is_in = match mregistry {
-            RegistryData::ModulesRegistry(ref map) => {
-                if let Some(_) = map.get(d) { true } else { false }
-            },
-            RegistryData::CacheRegistry(_) => false
+        let is_in = if let Some(ref reg) = mregistry.registry {
+            match reg {
+                RegistryData::ModulesRegistry(map) => {
+                    if let Some(_) = map.get(d) { true } else { false }
+                },
+                RegistryData::CacheRegistry(_) => false
+            }
+        } else {
+            let mes_err = log_message(MessageType::Error("Failed to read registry".to_string()), Some("SYNC"), false);
+            return Err(anyhow::anyhow!(mes_err))
         };
 
         if !is_in {
@@ -786,8 +800,11 @@ pub fn build_from_manifest(global: bool) -> Result<()> {
         LockFile::open_toml(&lpath)?
     };
 
-    let mut mindex = read_internal_registry(&modules_index, RegistryMode::ModulesMode)?;
-    let mut cindex = read_internal_registry(&cache_index, RegistryMode::CacheMode)?;
+    let mut mindex = Registry::new(&modules_index, RegistryMode::ModulesMode);
+    let mut cindex = Registry::new(&cache_index, RegistryMode::CacheMode);
+    mindex.read_internal_registry()?;
+    cindex.read_internal_registry()?;
+
     let mut visited = HashSet::new();
 
     log_message(
@@ -823,8 +840,8 @@ pub fn build_from_manifest(global: bool) -> Result<()> {
         true
     );
 
-    write_internal_registry(&modules_index, mindex)?;
-    write_internal_registry(&cache_index, cindex)?;
+    mindex.write_internal_registry()?;
+    cindex.write_internal_registry()?;
 
     // build plugins from manifest
     log_message(
@@ -920,7 +937,8 @@ pub fn build_from_lock(global: bool) -> Result<()> {
     if !cache_folder.exists() { fs::create_dir_all(&cache_folder)?; }
     if !modules_folder.exists() { fs::create_dir_all(&modules_folder)?; }
 
-    let mut mindex = read_internal_registry(&modules_index_path, RegistryMode::ModulesMode)?;
+    let mut mindex = Registry::new(&modules_index_path, RegistryMode::ModulesMode);
+    mindex.read_internal_registry()?;
 
     log_message(
         MessageType::Info("Restoring environment exactly from Cspm.lock...".to_string()),
@@ -947,7 +965,7 @@ pub fn build_from_lock(global: bool) -> Result<()> {
 
             download_package(&pkg.source, &pkg.name, &pkg.version, &cache_folder, &cached_module)?;
 
-            let downloaded_checksum = computer_checksum(&cached_module)?;
+            let downloaded_checksum = compute_checksum(&cached_module)?;
             if downloaded_checksum != pkg.checksum {
                 fs::remove_dir_all(&cached_module)?;
                 let mes_err = log_message(
@@ -992,7 +1010,7 @@ pub fn build_from_lock(global: bool) -> Result<()> {
                 true
             );
 
-            add_entry_to_registry(&pkg.name, &pkg.version, &mut mindex);
+            mindex.add_entry_to_registry(&pkg.name, &pkg.version);
         }
     }
 
@@ -1002,7 +1020,7 @@ pub fn build_from_lock(global: bool) -> Result<()> {
         true
     );
 
-    write_internal_registry(&modules_index_path, mindex)?;
+    mindex.write_internal_registry()?;
 
     // rebuild plugins
     log_message(
@@ -1412,7 +1430,8 @@ pub fn validate_project() -> Result<()> {
     }
 
     let mindex_path = mfolder.join(CS_MODULES_INDEX);
-    let mindex = read_internal_registry(&mindex_path, RegistryMode::ModulesMode).ok();
+    let mut mindex = Registry::new(&mindex_path, RegistryMode::ModulesMode);
+    mindex.read_internal_registry()?;
 
     log_message(
         MessageType::Info("Check Cspm.toml file".to_string()),
@@ -1435,7 +1454,7 @@ pub fn validate_project() -> Result<()> {
     };
 
     let mut fix = false;
-    if let Some(ref mregistry) = mindex {
+    if let Some(ref mregistry) = mindex.registry {
         for (dep, ver) in mtoml.dependencies.iter() {
             match mregistry {
                 RegistryData::ModulesRegistry(data) => {
@@ -1479,7 +1498,7 @@ pub fn validate_project() -> Result<()> {
 
     // rebuild
     if !mtoml.dependencies.is_empty() {
-        if fix || mindex.is_none() {
+        if fix || mindex.registry.is_none() {
             log_message(
                 MessageType::Info("Repair project dependencies".to_string()),
                 Some("VALIDATE"),

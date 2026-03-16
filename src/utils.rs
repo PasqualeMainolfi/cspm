@@ -2,10 +2,11 @@ use anyhow::Result;
 use colored::*;
 use::std::{ fs, path, process, env, collections::HashMap };
 use crate::colored_name;
-use crate::parser::{ RemoteRegistryIndex, GitHubItem };
-use crate::confres::{
-    REMOTE_REGISTRY_INDEX
+use crate::{
+    parser::{ RemoteRegistryIndex, GitHubItem },
+    confres::REMOTE_REGISTRY_INDEX
 };
+
 
 pub enum MessageType {
     Info(String),

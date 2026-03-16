@@ -244,7 +244,137 @@ pub struct RemoteRegistryIndex {
     pub description: String
 }
 
-pub fn computer_checksum(path_to_module: &path::Path) -> Result<String> {
+pub struct Registry {
+    pub registry: Option<RegistryData>,
+    rpath: path::PathBuf,
+    rmode: RegistryMode,
+}
+
+impl Registry {
+    pub fn new(path_to_registry: &path::Path, rmode: RegistryMode) -> Self {
+        Self {
+            registry: None,
+            rpath: path_to_registry.to_path_buf(),
+            rmode,
+        }
+    }
+
+    pub fn read_internal_registry(&mut self) -> Result<()> {
+        let condition = self.rpath.exists() && self.rpath.is_file();
+        match self.rmode {
+            RegistryMode::CacheMode => {
+                let mindex: HashMap<String, HashSet<String>> = if condition {
+                    let mstring = fs::read_to_string(&self.rpath)?;
+                    serde_json::from_str(&mstring)?
+                } else {
+                    HashMap::new()
+                };
+                self.registry = Some(RegistryData::CacheRegistry(mindex));
+                return Ok(())
+            }
+            RegistryMode::ModulesMode => {
+                let mindex: HashMap<String, String> = if condition {
+                    let mstring = fs::read_to_string(&self.rpath)?;
+                    serde_json::from_str(&mstring)?
+                } else {
+                    HashMap::new()
+                };
+                self.registry = Some(RegistryData::ModulesRegistry(mindex));
+                return Ok(())
+            }
+        }
+    }
+
+    pub fn write_internal_registry(&self) -> Result<()> {
+        if let Some(ref mindex) = self.registry {
+            let mindex_string = match mindex {
+                RegistryData::CacheRegistry(map) => {
+                    serde_json::to_string_pretty::<HashMap<String, HashSet<String>>>(&map)?
+                },
+                RegistryData::ModulesRegistry(map) => {
+                    serde_json::to_string_pretty::<HashMap<String, String>>(&map)?
+                }
+            };
+            fs::write(&self.rpath, mindex_string)?;
+            return Ok(())
+        }
+
+        let mes_err = log_message(MessageType::Error("Failed to write registry index".to_string()), None, false);
+        Err(anyhow::anyhow!(mes_err))
+    }
+
+    pub fn remove_entry_from_registry(&mut self, entry_name: String) {
+        if let Some(ref mut registry) = self.registry {
+            let (current_name, current_version) = parse_module_name(&entry_name);
+            match registry {
+                RegistryData::CacheRegistry(map) => {
+                    let mut to_delete = false;
+                    if let Some(ref mut vers) = map.get_mut(&current_name) {
+                        if vers.contains(&current_version) { vers.remove(&current_version); }
+                        to_delete = vers.is_empty();
+                    }
+                    if to_delete { map.remove(&current_name); }
+                },
+                RegistryData::ModulesRegistry(map) => {
+                    let mut to_delete = false;
+                    if let Some(vers) = map.get_mut(&current_name) {
+                        if vers == &current_version || current_version.is_empty() { to_delete = true; }
+                    }
+                    if to_delete { map.remove(&current_name); }
+                }
+            }
+        }
+    }
+
+    pub fn add_entry_to_registry(&mut self, entry_name: &str, entry_version: &str) {
+        if let Some(ref mut registry) = self.registry {
+            match registry {
+                RegistryData::CacheRegistry(map) => {
+                    map
+                        .entry(entry_name.to_string())
+                        .and_modify(|v| { v.insert(entry_version.to_string()); })
+                        .or_insert_with(|| {
+                            let mut hset = HashSet::new();
+                            hset.insert(entry_version.to_string());
+                            hset
+                        });
+                },
+                RegistryData::ModulesRegistry(map) => {
+                    map
+                        .entry(entry_name.to_string())
+                        .and_modify(|v| *v = entry_version.to_string())
+                        .or_insert_with(|| entry_version.to_string());
+                }
+            }
+        }
+    }
+
+    pub fn query_registry(&self, pkg_name: &str) -> Option<String> {
+        if let Some(ref registry) = self.registry {
+            match registry {
+                RegistryData::ModulesRegistry(data) => {
+                    if let Some(version) = data.get(pkg_name) { return Some(version.clone()) }
+                },
+                RegistryData::CacheRegistry(_) => { }
+            }
+        }
+        None
+    }
+
+    pub fn from_registry_to_list(&self) -> HashSet<String> {
+        if let Some(ref registry) = self.registry {
+            match registry {
+                RegistryData::ModulesRegistry(data) => {
+                    return data.iter().map(|(d, v)| format!("{}@{}", d, v)).collect::<HashSet<String>>()
+                },
+                RegistryData::CacheRegistry(_) => { }
+            }
+        }
+        HashSet::new()
+    }
+}
+
+pub fn compute_checksum(path_to_module: &path::Path) -> Result<String> {
     let mut hasher = Sha256::new();
 
     // deterministic
@@ -311,89 +441,11 @@ pub fn resolve_module_version(pname: &str, version: Option<String>) -> Result<St
     return Err(anyhow::anyhow!(mes_err))
 }
 
-pub fn read_internal_registry(mod_registry_path: &path::Path, registry_mode: RegistryMode) -> Result<RegistryData> {
-    match registry_mode {
-        RegistryMode::CacheMode => {
-            let mindex: HashMap<String, HashSet<String>> = if mod_registry_path.exists() && mod_registry_path.is_file() {
-                let mstring = fs::read_to_string(mod_registry_path)?;
-                serde_json::from_str(&mstring)?
-            } else {
-                HashMap::new()
-            };
-            return Ok(RegistryData::CacheRegistry(mindex))
-        }
-        RegistryMode::ModulesMode => {
-            let mindex: HashMap<String, String> = if mod_registry_path.exists() && mod_registry_path.is_file() {
-                let mstring = fs::read_to_string(mod_registry_path)?;
-                serde_json::from_str(&mstring)?
-            } else {
-                HashMap::new()
-            };
-            return Ok(RegistryData::ModulesRegistry(mindex))
-        }
-    }
-}
-
-pub fn write_internal_registry(mod_registry_path: &path::Path, mindex: RegistryData) -> Result<()> {
-    let mindex_string = match mindex {
-        RegistryData::CacheRegistry(map) => {
-            serde_json::to_string_pretty::<HashMap<String, HashSet<String>>>(&map)?
-        },
-        RegistryData::ModulesRegistry(map) => {
-            serde_json::to_string_pretty::<HashMap<String, String>>(&map)?
-        }
-    };
-    fs::write(mod_registry_path, mindex_string)?;
-    Ok(())
-}
-
 pub fn parse_module_name(package_name: &str) -> (String, String) {
     let mut package_iter = package_name.split('@');
     let name = package_iter.next().unwrap_or("");
     let version = package_iter.next().unwrap_or("");
     (name.to_string(), version.to_string())
-}
-
-pub fn remove_entry_from_registry(entry_name: String, registry: &mut RegistryData) {
-    let (current_name, current_version) = parse_module_name(&entry_name);
-    match registry {
-        RegistryData::CacheRegistry(map) => {
-            let mut to_delete = false;
-            if let Some(ref mut vers) = map.get_mut(&current_name) {
-                if vers.contains(&current_version) { vers.remove(&current_version); }
-                to_delete = vers.is_empty();
-            }
-            if to_delete { map.remove(&current_name); }
-        },
-        RegistryData::ModulesRegistry(map) => {
-            let mut to_delete = false;
-            if let Some(vers) = map.get_mut(&current_name) {
-                if vers == &current_version || current_version.is_empty() { to_delete = true; }
-            }
-            if to_delete { map.remove(&current_name); }
-        }
-    }
-}
-
-pub fn add_entry_to_registry(entry_name: &str, entry_version: &str, registry: &mut RegistryData) {
-    match registry {
-        RegistryData::CacheRegistry(map) => {
-            map
-                .entry(entry_name.to_string())
-                .and_modify(|v| { v.insert(entry_version.to_string()); })
-                .or_insert_with(|| {
-                    let mut hset = HashSet::new();
-                    hset.insert(entry_version.to_string());
-                    hset
-                });
-        },
-        RegistryData::ModulesRegistry(map) => {
-            map
-                .entry(entry_name.to_string())
-                .and_modify(|v| *v = entry_version.to_string())
-                .or_insert_with(|| entry_version.to_string());
-        }
-    }
 }
 
 pub enum VersionStatus {
@@ -451,27 +503,10 @@ impl Version {
     }
 }
 
-pub fn query_registry(registry: &RegistryData, pkg_name: &str) -> Option<String> {
-    match registry {
-        RegistryData::ModulesRegistry(data) => {
-            if let Some(version) = data.get(pkg_name) { return Some(version.clone()) }
-        },
-        RegistryData::CacheRegistry(_) => { }
-    }
-    None
-}
-
-pub fn from_registry_to_list(registry: &RegistryData) -> HashSet<String> {
-    match registry {
-        RegistryData::ModulesRegistry(data) => {
-            return data.iter().map(|(d, v)| format!("{}@{}", d, v)).collect::<HashSet<String>>()
-        },
-        RegistryData::CacheRegistry(_) => HashSet::new()
-    }
-}
-
 pub fn check_manifest_deps(modules_folder: &path::Path, manifest: &Manifest) -> Result<()> {
-    if let Ok(rdata) = read_internal_registry(modules_folder, RegistryMode::ModulesMode) {
+    let mut registry = Registry::new(modules_folder, RegistryMode::ModulesMode);
+    registry.read_internal_registry()?;
+    if let Some(rdata) = registry.registry {
         match rdata {
             RegistryData::ModulesRegistry(data) => {
                 for (d, v) in manifest.dependencies.iter() {

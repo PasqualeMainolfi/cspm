@@ -2,10 +2,10 @@ use anyhow::Result;
 use serde_json::Value;
 use colored::*;
 use std::{ collections::{ HashSet, HashMap }, fs };
-use crate::utils::{ MessageType, log_message, fetch_remote_registry_index };
 use crate::{
     parser::VersionStatus,
-    prj_core::{ remove_helper, resolve_dependencies }
+    prj_core::{ remove_helper, resolve_dependencies },
+    utils::{ MessageType, log_message, fetch_remote_registry_index }
 };
 
 use crate::{
@@ -20,13 +20,9 @@ use crate::parser::{
     Manifest,
     ManageToml,
     Version,
+    Registry,
     parse_module_name,
-    query_registry,
-    read_internal_registry,
     resolve_module_version,
-    write_internal_registry,
-    remove_entry_from_registry,
-    from_registry_to_list,
 };
 
 use crate::confres::{
@@ -85,7 +81,8 @@ pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
     let cache_index_path = cache_folder.join(CS_CACHE_INDEX);
 
     if clean {
-        let mut cindex = read_internal_registry(&cache_index_path, RegistryMode::CacheMode)?;
+        let mut cache_registry = Registry::new(&cache_index_path, RegistryMode::CacheMode);
+        cache_registry.read_internal_registry()?;
         for entry in fs::read_dir(cache_folder)? {
             let entry = entry?;
             if !entry.file_type()?.is_dir() { continue; }
@@ -96,11 +93,11 @@ pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
             log_message(MessageType::Info(format!("Remove module {} from cache", colored_name!(pkg_name))), Some("CACHE"), true);
             fs::remove_dir_all(&pkg_path)?;
 
-            remove_entry_from_registry(pkg_name.clone(), &mut cindex);
+            cache_registry.remove_entry_from_registry(pkg_name.clone());
         }
 
         log_message(MessageType::Info("Update cache registry".to_string()), Some("CACHE"), true);
-        write_internal_registry(&cache_index_path, cindex)?;
+        cache_registry.write_internal_registry()?;
 
         return Ok(())
     }
@@ -142,16 +139,17 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
     if !cache_folder.is_dir() { fs::create_dir_all(&cache_folder)?; }
     if !modules_folder.is_dir() { fs::create_dir_all(&modules_folder)?; }
 
-    let mindex_check = read_internal_registry(&modules_index, RegistryMode::ModulesMode)?;
+    let mut module_registry = Registry::new(&modules_index, RegistryMode::ModulesMode);
+    module_registry.read_internal_registry()?;
 
     let (name, version) = parse_module_name(&module);
     let version = if !version.is_empty() { Some(version) } else { None };
     let mversion = resolve_module_version(&name, version)?;
 
-    let rvers = query_registry(&mindex_check, &name);
+    let rvers = module_registry.query_registry(&name);
     if let Some(internal_version) = rvers {
         let parsed_internal_version = Version::parse(&internal_version)?;
-        let parsed_mversion = Version::parse(&internal_version)?;
+        let parsed_mversion = Version::parse(&mversion)?;
 
         match parsed_internal_version.compare(&parsed_mversion) {
             VersionStatus::Old | VersionStatus::Young => {
@@ -181,8 +179,12 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
         true
     );
 
-    let mut mindex = read_internal_registry(&modules_index, RegistryMode::ModulesMode)?;
-    let mut cindex = read_internal_registry(&cache_index, RegistryMode::CacheMode)?;
+    // read updated registry
+    module_registry.read_internal_registry()?;
+
+    let mut cache_registry = Registry::new(&cache_index, RegistryMode::CacheMode);
+    cache_registry.read_internal_registry()?;
+
     let mut visited = HashSet::new();
     resolve_dependencies(
         &cache_folder,
@@ -190,8 +192,8 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
         &name,
         &mversion,
         &mut visited,
-        &mut mindex,
-        &mut cindex,
+        &mut module_registry,
+        &mut cache_registry,
         None
     )?;
 
@@ -201,8 +203,8 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
         true
     );
 
-    write_internal_registry(&modules_index, mindex)?;
-    write_internal_registry(&cache_index, cindex)?;
+    module_registry.write_internal_registry()?;
+    cache_registry.write_internal_registry()?;
 
     Ok(())
 }
@@ -211,9 +213,24 @@ pub fn uninstall_globally(module: String, force: bool) -> Result<()> {
     let mroot = get_root(true, &ProjectRootMode::ModulesRoot)?;
     let cs_modules_path = mroot.join(CS_MODULES_FOLDER);
     let mindex_path = cs_modules_path.join(CS_MODULES_INDEX);
-    let mut mindex = read_internal_registry(&mindex_path, RegistryMode::ModulesMode)?;
+    let mut mregistry = Registry::new(&mindex_path, RegistryMode::ModulesMode);
+    mregistry.read_internal_registry()?;
 
-    let (name, _) = parse_module_name(&module);
+    let (name, mut version) = parse_module_name(&module);
+    if version.is_empty() {
+        match mregistry.query_registry(&name) {
+            Some(v) => version = v,
+            None => {
+                let mes_err = log_message(
+                    MessageType::Error("Failed to read the registry. Specify the version <name@version>".to_string()),
+                    Some("UNINSTALL"),
+                    false
+                );
+
+                return Err(anyhow::anyhow!(mes_err))
+            }
+        }
+    }
 
     log_message(
         MessageType::Info(format!("Remove module {} from cs_modules folder", colored_name!(name))),
@@ -228,7 +245,8 @@ pub fn uninstall_globally(module: String, force: bool) -> Result<()> {
     );
 
     // delete from modules (also dependencies)
-    remove_helper(&cs_modules_path, &name, force, &mut mindex, None)?;
+    let full_name = format!("{}@{}", name, version);
+    remove_helper(&cs_modules_path, &full_name, force, &mut mregistry, None)?;
 
     // update registry index
     log_message(
@@ -237,7 +255,7 @@ pub fn uninstall_globally(module: String, force: bool) -> Result<()> {
         true
     );
 
-    write_internal_registry(&mindex_path, mindex)?;
+    mregistry.write_internal_registry()?;
 
     Ok(())
 }
@@ -246,12 +264,13 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
     let mroot = get_root(true, &ProjectRootMode::ModulesRoot)?;
     let cs_modules_path = mroot.join(CS_MODULES_FOLDER);
     let mindex_path = cs_modules_path.join(CS_MODULES_INDEX);
-    let registry = read_internal_registry(&mindex_path, RegistryMode::ModulesMode)?;
+    let mut mregistry = Registry::new(&mindex_path, RegistryMode::ModulesMode);
+    mregistry.read_internal_registry()?;
 
     let mut to_update: HashSet<String> = HashSet::new();
     if let Some(mods) = &modules {
         for module in mods.iter() {
-            if let Some(rvers) = query_registry(&registry, &module) {
+            if let Some(rvers) = mregistry.query_registry(&module) {
                 let parsed_registry_version = Version::parse(&rvers)?;
                 let latest_version = resolve_module_version(&module, Some(rvers.clone()))?;
                 match parsed_registry_version.compare(&Version::parse(&latest_version)?) {
@@ -285,7 +304,7 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
             }
         }
     } else {
-        to_update = from_registry_to_list(&registry);
+        to_update = mregistry.from_registry_to_list();
     }
 
     for entry in to_update.iter() {

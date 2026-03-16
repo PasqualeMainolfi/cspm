@@ -1,8 +1,11 @@
 use directories::ProjectDirs;
 use anyhow::Result;
 use std::{ fs, path };
-use crate::parser::{ ProjectInfo, ManageToml };
-use crate::utils::{ MessageType, log_message };
+use crate::{
+    parser::{ ProjectInfo, ManageToml },
+    utils::{ MessageType, log_message }
+};
+
 
 pub const CSPM_MANIFEST: &str = include_str!("../Cargo.toml");
 pub const CSD_MAIN_TEMPLATE: &str = include_str!("../templates/main_template.csd");

@@ -8,30 +8,32 @@ pub mod macros;
 
 use clap::Parser;
 use cli::{ CsCli, CsCommands };
-use crate::utils::{ MessageType, log_message };
-use crate::glb_core::{
-    get_cspm_version,
-    search_package,
-    manage_cache,
-    install_globally,
-    uninstall_globally,
-    upgrade_globally
+use crate::{
+    utils::{ MessageType, log_message },
+    glb_core::{
+        get_cspm_version,
+        search_package,
+        manage_cache,
+        install_globally,
+        uninstall_globally,
+        upgrade_globally
+    },
+    prj_core::{
+        create_project,
+        add_package,
+        remove_package,
+        update_package,
+        sync_project,
+        build_from_manifest,
+        build_from_lock,
+        reinstall_module,
+        run_project,
+        install_plugins,
+        validate_project,
+        publish_module
+    }
 };
 
-use prj_core::{
-    create_project,
-    add_package,
-    remove_package,
-    update_package,
-    sync_project,
-    build_from_manifest,
-    build_from_lock,
-    reinstall_module,
-    run_project,
-    install_plugins,
-    validate_project,
-    publish_module
-};
 
 fn main() {
     colored::control::set_override(true);
