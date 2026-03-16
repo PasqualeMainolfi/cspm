@@ -1,7 +1,7 @@
 use anyhow::Result;
 use colored::*;
 use::std::{ fs, path, process, env, collections::HashMap };
-use crate::colored_name;
+use crate::{ colored_name, cmd_exists };
 use crate::{
     parser::{ RemoteRegistryIndex, GitHubItem },
     confres::REMOTE_REGISTRY_INDEX
@@ -143,46 +143,51 @@ pub fn run_csound_script(entry_point: &(String, String), cs_options: &Vec<String
 
 pub fn check_risset() -> Result<()> {
     // check if risset is installed
-    if process::Command::new("risset").output().is_err() {
+    let risset_exists = cmd_exists!("risset");
 
+    if !risset_exists {
         log_message(MessageType::Info("risset not found. Installing...".to_string()), Some("RISSET"), true);
-
-        match env::consts::OS {
-            "linux" | "macos" => {
-                log_message(MessageType::Info("Install uv".to_string()), Some("RISSET"), true);
-                process::Command::new("curl")
-                    .args(["-LsSf", "https://astral.sh/uv/install.sh", "|", "sh"])
-                    .status()?;
-            },
-            "windows" => {
-                log_message(MessageType::Info("Install uv".to_string()), Some("RISSET"), true);
-                process::Command::new("powershell")
-                    .args(["-ExecutionPolicy", "ByPass"])
-                    .args(["-c", "\"irm https://astral.sh/uv/install.ps1 | iex\""])
-                    .status()?;
-            },
-            _ => {
-                let mes_err = log_message(MessageType::Error("Unknown OS".to_string()), Some("RISSET"), false);
-                return Err(anyhow::anyhow!(mes_err))
+        // check if uv is installed
+        let uv_exists = cmd_exists!("uv");
+        if !uv_exists {
+            match env::consts::OS {
+                "linux" | "macos" => {
+                    log_message(MessageType::Info("Install uv".to_string()), Some("RISSET"), true);
+                    process::Command::new("sh")
+                        .arg("-c")
+                        .arg("curl -LsSf https://astral.sh/uv/install.sh | sh")
+                        .status()?;
+                },
+                "windows" => {
+                    log_message(MessageType::Info("Install uv".to_string()), Some("RISSET"), true);
+                    process::Command::new("powershell")
+                        .args([
+                            "-ExecutionPolicy",
+                            "ByPass",
+                            "-c",
+                            "irm https://astral.sh/uv/install.ps1 | iex"
+                        ])
+                        .status()?;
+                },
+                _ => {
+                    let mes_err = log_message(MessageType::Error("Unknown OS".to_string()), Some("RISSET"), false);
+                    return Err(anyhow::anyhow!(mes_err))
+                }
             }
         }
 
+
         log_message(MessageType::Info("Install risset".to_string()), Some("RISSET"), true);
 
+        // install risset
         process::Command::new("uv")
-            .arg("tool")
-            .args(["install", "risset"])
+            .args(["tool", "install", "risset"])
             .status()?;
 
-        log_message(MessageType::Info("Upgrade risset".to_string()), Some("RISSET"), true);
+        log_message(MessageType::Info("risset has been installed".to_string()), Some("RISSET"), true);
+    } else {
 
-        process::Command::new("uv")
-            .arg("tool")
-            .args(["upgrade", "risset"])
-            .status()?;
     }
-
-    log_message(MessageType::Info("risset has been installed".to_string()), Some("RISSET"), true);
 
     Ok(())
 }

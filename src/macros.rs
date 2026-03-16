@@ -18,3 +18,14 @@ macro_rules! colored_name_version {
         (format!("{}@{}", colored_name!($name), colored_version!($ver)))
     };
 }
+
+#[macro_export]
+macro_rules! cmd_exists {
+    ($cmd:expr) => {
+        process::Command::new($cmd)
+            .arg("--version")
+            .output()
+            .map(|out| out.status.success())
+            .unwrap_or(false)
+    };
+}
