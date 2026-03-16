@@ -38,7 +38,7 @@ pub enum ProjectRootMode {
     ProjectRoot
 }
 
-pub fn get_root(global: bool, mode: &ProjectRootMode) -> Result<path::PathBuf> {
+pub fn get_root(global: bool, mode: &ProjectRootMode, display: bool) -> Result<path::PathBuf> {
     match global {
         true => {
             let mes_err = log_message(MessageType::Error("Cannot determine home directory".to_string()), None, false);
@@ -54,22 +54,26 @@ pub fn get_root(global: bool, mode: &ProjectRootMode) -> Result<path::PathBuf> {
                 fs::create_dir_all(config_dir)?;
             }
 
-            log_message(
-                MessageType::Info(
-                    format!("Global cache root {}", pdir.data_dir().to_string_lossy())
-                ), None, true
-            );
+            if display {
+                log_message(
+                    MessageType::Info(
+                        format!("Global cache root {}", pdir.data_dir().to_string_lossy())
+                    ), None, true
+                );
+            }
 
             Ok(pdir.data_dir().to_path_buf())
         },
         false => {
             let pdir = std::env::current_dir()?;
 
-            log_message(
-                MessageType::Info(
-                    format!("Local env {} (root for {:?})", pdir.to_string_lossy(), mode)
-                ), None, true
-            );
+            if display {
+                log_message(
+                    MessageType::Info(
+                        format!("Local env {} (root for {:?})", pdir.to_string_lossy(), mode)
+                    ), None, true
+                );
+            }
 
             Ok(pdir.to_path_buf())
         }
@@ -80,23 +84,60 @@ pub struct ProjectRoots {
     pub project_root: path::PathBuf,
     pub modules_root: path::PathBuf,
     pub cache_root: path::PathBuf,
+    display: bool
 }
 
 impl ProjectRoots {
-    pub fn new() -> Result<Self> {
-        let project_root = get_root(false, &ProjectRootMode::ProjectRoot)?;
-        let cache_root = get_root(true, &ProjectRootMode::CacheRoot)?;
+    pub fn new(display: bool) -> Result<Self> {
+        let project_root = get_root(false, &ProjectRootMode::ProjectRoot, display)?;
+        let cache_root = get_root(true, &ProjectRootMode::CacheRoot, display)?;
         Ok(Self {
             project_root,
             modules_root: path::PathBuf::new(),
-            cache_root
+            cache_root,
+            display
         })
     }
 
-    pub fn set_modules_root(&mut self) -> Result<()> {
-        let pinfo = ProjectInfo::open_toml(&self.project_root.join(PROJECT_INFO_FILE))?;
-        self.modules_root = get_root(pinfo.global_modules, &ProjectRootMode::ModulesRoot)?;
+    pub fn set_modules_root(&mut self, global: Option<bool>) -> Result<()> {
+        let internal_global = if let Some(g) = global { g } else {
+            let pinfo = ProjectInfo::open_toml(&self.project_root.join(PROJECT_INFO_FILE))?;
+            pinfo.global_modules
+        };
+
+        self.modules_root = get_root(internal_global, &ProjectRootMode::ModulesRoot, self.display)?;
         Ok(())
+    }
+}
+
+pub struct ProjectPaths {
+    pub manifest_file: path::PathBuf,
+    pub lock_file: path::PathBuf,
+    pub cache_folder: path::PathBuf,
+    pub cache_registry: path::PathBuf,
+    pub modules_folder: path::PathBuf,
+    pub modules_registry: path::PathBuf,
+    pub project_info_file: path::PathBuf,
+    pub gitignore_file: path::PathBuf
+}
+
+impl ProjectPaths {
+    pub fn new(proots: &ProjectRoots) -> Self {
+        let cache_folder = proots.cache_root.join(CS_MODULES_CACHE_FOLDER);
+        let cache_registry = cache_folder.join(CS_CACHE_INDEX);
+        let modules_folder = proots.modules_root.join(CS_MODULES_FOLDER);
+        let modules_registry = modules_folder.join(CS_MODULES_INDEX);
+
+        Self {
+            manifest_file: proots.project_root.join(MANIFEST_FILE),
+            lock_file: proots.project_root.join(LOCK_FILE),
+            cache_folder: cache_folder,
+            cache_registry,
+            modules_folder: modules_folder,
+            modules_registry,
+            project_info_file: proots.project_root.join(PROJECT_INFO_FILE),
+            gitignore_file: proots.project_root.join(".gitignore")
+        }
     }
 }
 

@@ -29,3 +29,10 @@ macro_rules! cmd_exists {
             .unwrap_or(false)
     };
 }
+
+#[macro_export]
+macro_rules! build_dir {
+    ($pth:expr) => {
+        (if !$pth.is_dir() { fs::create_dir_all($pth)?; })
+    };
+}

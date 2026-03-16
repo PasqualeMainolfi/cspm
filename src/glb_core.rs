@@ -3,36 +3,25 @@ use serde_json::Value;
 use colored::*;
 use std::{ collections::{ HashSet, HashMap }, fs };
 use crate::{
-    parser::VersionStatus,
+    confres::{ ProjectPaths, ProjectRoots, MANIFEST_FILE, CSPM_MANIFEST },
     prj_core::{ remove_helper, resolve_dependencies },
-    utils::{ MessageType, log_message, fetch_remote_registry_index }
+    utils::{ MessageType, fetch_remote_registry_index, log_message },
+    parser::{
+        RegistryMode,
+        RemoteRegistryIndex,
+        Manifest,
+        ManageToml,
+        Version,
+        Registry,
+        ModuleTools,VersionStatus
+    },
 };
 
 use crate::{
     colored_name,
     colored_name_version,
-    colored_version
-};
-
-use crate::parser::{
-    RegistryMode,
-    RemoteRegistryIndex,
-    Manifest,
-    ManageToml,
-    Version,
-    Registry,
-    ModuleTools,
-};
-
-use crate::confres::{
-    CS_MODULES_CACHE_FOLDER,
-    CS_CACHE_INDEX,
-    CS_MODULES_FOLDER,
-    CS_MODULES_INDEX,
-    MANIFEST_FILE,
-    CSPM_MANIFEST,
-    ProjectRootMode,
-    get_root
+    colored_version,
+    build_dir
 };
 
 
@@ -69,20 +58,18 @@ pub fn search_package(module_name: &str) -> Result<()> {
 }
 
 pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
-    let root = get_root(true, &ProjectRootMode::CacheRoot)?;
-    let cache_folder = root.join(CS_MODULES_CACHE_FOLDER);
+    let roots = ProjectRoots::new(false)?;
+    let pths = ProjectPaths::new(&roots);
 
-    if !cache_folder.exists() || !cache_folder.is_dir() {
+    if !pths.cache_folder.exists() || !pths.cache_folder.is_dir() {
         log_message(MessageType::Info("Cache is empty. Nothing to do".to_string()), Some("CACHE"), true);
         return Ok(())
     }
 
-    let cache_index_path = cache_folder.join(CS_CACHE_INDEX);
-
     if clean {
-        let mut cache_registry = Registry::new(&cache_index_path, RegistryMode::CacheMode);
+        let mut cache_registry = Registry::new(&pths.cache_registry, RegistryMode::CacheMode);
         cache_registry.read_internal_registry()?;
-        for entry in fs::read_dir(cache_folder)? {
+        for entry in fs::read_dir(pths.cache_folder)? {
             let entry = entry?;
             if !entry.file_type()?.is_dir() { continue; }
 
@@ -104,7 +91,7 @@ pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
     // cache list
     if list {
         log_message(MessageType::Info("Cache status:".to_string()), Some("CACHE"), true);
-        for entry in fs::read_dir(cache_folder)? {
+        for entry in fs::read_dir(pths.cache_folder)? {
             let entry = entry?;
             let entry_path = entry.path();
             if entry_path.is_dir() {
@@ -127,18 +114,14 @@ pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
 }
 
 pub fn install_globally(module: String, force: bool) -> Result<()> {
-    let croot = get_root(true, &ProjectRootMode::CacheRoot)?;
-    let mroot = get_root(true, &ProjectRootMode::ModulesRoot)?;
+    let mut roots = ProjectRoots::new(false)?;
+    roots.set_modules_root(Some(true))?;
+    let pths = ProjectPaths::new(&roots);
 
-    let cache_folder = croot.join(CS_MODULES_CACHE_FOLDER);
-    let cache_index = cache_folder.join(CS_CACHE_INDEX);
-    let modules_folder = mroot.join(CS_MODULES_FOLDER);
-    let modules_index = modules_folder.join(CS_MODULES_INDEX);
+    build_dir!(&pths.cache_folder);
+    build_dir!(&pths.modules_folder);
 
-    if !cache_folder.is_dir() { fs::create_dir_all(&cache_folder)?; }
-    if !modules_folder.is_dir() { fs::create_dir_all(&modules_folder)?; }
-
-    let mut module_registry = Registry::new(&modules_index, RegistryMode::ModulesMode);
+    let mut module_registry = Registry::new(&pths.modules_registry, RegistryMode::ModulesMode);
     module_registry.read_internal_registry()?;
 
     let (name, version) = ModuleTools::parse_module_name(&module);
@@ -181,13 +164,13 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
     // read updated registry
     module_registry.read_internal_registry()?;
 
-    let mut cache_registry = Registry::new(&cache_index, RegistryMode::CacheMode);
+    let mut cache_registry = Registry::new(&pths.cache_registry, RegistryMode::CacheMode);
     cache_registry.read_internal_registry()?;
 
     let mut visited = HashSet::new();
     resolve_dependencies(
-        &cache_folder,
-        &modules_folder,
+        &pths.cache_folder,
+        &pths.modules_folder,
         &name,
         &mversion,
         &mut visited,
@@ -209,10 +192,11 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
 }
 
 pub fn uninstall_globally(module: String, force: bool) -> Result<()> {
-    let mroot = get_root(true, &ProjectRootMode::ModulesRoot)?;
-    let cs_modules_path = mroot.join(CS_MODULES_FOLDER);
-    let mindex_path = cs_modules_path.join(CS_MODULES_INDEX);
-    let mut mregistry = Registry::new(&mindex_path, RegistryMode::ModulesMode);
+    let mut roots = ProjectRoots::new(false)?;
+    roots.set_modules_root(Some(true))?;
+    let pths = ProjectPaths::new(&roots);
+
+    let mut mregistry = Registry::new(&pths.modules_registry, RegistryMode::ModulesMode);
     mregistry.read_internal_registry()?;
 
     let (name, mut version) = ModuleTools::parse_module_name(&module);
@@ -245,7 +229,7 @@ pub fn uninstall_globally(module: String, force: bool) -> Result<()> {
 
     // delete from modules (also dependencies)
     let full_name = format!("{}@{}", name, version);
-    remove_helper(&cs_modules_path, &full_name, force, &mut mregistry, None)?;
+    remove_helper(&pths.modules_folder, &full_name, force, &mut mregistry, None)?;
 
     // update registry index
     log_message(
@@ -260,10 +244,11 @@ pub fn uninstall_globally(module: String, force: bool) -> Result<()> {
 }
 
 pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()> {
-    let mroot = get_root(true, &ProjectRootMode::ModulesRoot)?;
-    let cs_modules_path = mroot.join(CS_MODULES_FOLDER);
-    let mindex_path = cs_modules_path.join(CS_MODULES_INDEX);
-    let mut mregistry = Registry::new(&mindex_path, RegistryMode::ModulesMode);
+    let mut roots = ProjectRoots::new(false)?;
+    roots.set_modules_root(Some(true))?;
+    let pths = ProjectPaths::new(&roots);
+
+    let mut mregistry = Registry::new(&pths.modules_registry, RegistryMode::ModulesMode);
     mregistry.read_internal_registry()?;
 
     let mut to_update: HashSet<String> = HashSet::new();

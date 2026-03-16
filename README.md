@@ -60,6 +60,7 @@ description = "An awesome FM synthesizer"
 authors =["<you@example.com>"]
 license = "MIT"
 include = ["src"]
+plugins = []
 
 [dependencies]
 module1 = "1.0.0"

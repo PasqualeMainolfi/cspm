@@ -1,7 +1,8 @@
 use anyhow::Result;
 use colored::*;
-use::std::{ fs, path, process, env, collections::HashMap };
-use crate::{ colored_name, cmd_exists };
+use regex::Regex;
+use std::{ fs, path, process, env, collections::HashMap };
+use crate::{ colored_name, colored_version, cmd_exists };
 use crate::{
     parser::{ RemoteRegistryIndex, GitHubItem },
     confres::REMOTE_REGISTRY_INDEX
@@ -118,6 +119,60 @@ pub fn download_package(
     Ok(())
 }
 
+pub fn get_csound_version() -> Option<String> {
+    let cmd = process::Command::new("csound").arg("--version").output().ok()?;
+    let stdout_string = String::from_utf8_lossy(&cmd.stdout);
+    let stderr_string = String::from_utf8_lossy(&cmd.stderr);
+    let vstring = format!("{}{}", stdout_string, stderr_string);
+    let re = Regex::new(r"\d+\.\d+(\.\d+)?").unwrap();
+
+    if let Some(v) = re.find(&vstring) {
+        return Some(v.as_str().to_string())
+    }
+
+    log_message(MessageType::Warning("Csound version not found".to_string()), None, true);
+    None
+}
+
+pub fn check_csound_installed() -> Option<String> {
+    if !cmd_exists!("csound") {
+        log_message(
+            MessageType::Warning(
+                "Csound executable not found. Please install csound from <https://github.com/csound/csound/releases> and specify the Csound version in Cspm.toml file".to_string()
+            ),
+            None,
+            true
+        );
+        None
+    } else {
+        get_csound_version()
+    }
+}
+
+pub fn check_csound_and_compare_versions(declared_version: &str) {
+    let cs_version = check_csound_installed();
+    match cs_version {
+        Some(v) => if v != declared_version {
+            log_message(
+                MessageType::Warning(
+                    format!("Declared Csound version {} in Cspm.toml file and the one detected {} are different", colored_version!(declared_version), colored_version!(v))
+                ),
+                Some("BUILD"),
+                true
+            );
+        },
+        None => {
+            log_message(
+                MessageType::Warning(
+                    "Csound version not found".to_string()
+                ),
+                Some("BUILD"),
+                true
+            );
+        }
+    }
+}
+
 pub fn run_csound_script(entry_point: &(String, String), cs_options: &Vec<String>) -> Result<()> {
     let (file1, file2) = entry_point;
     let mut c = process::Command::new("csound");
@@ -176,7 +231,6 @@ pub fn check_risset() -> Result<()> {
             }
         }
 
-
         log_message(MessageType::Info("Install risset".to_string()), Some("RISSET"), true);
 
         // install risset
@@ -185,8 +239,6 @@ pub fn check_risset() -> Result<()> {
             .status()?;
 
         log_message(MessageType::Info("risset has been installed".to_string()), Some("RISSET"), true);
-    } else {
-
     }
 
     Ok(())

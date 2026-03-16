@@ -4,19 +4,18 @@ use colored::*;
 use fs_extra::dir::{ copy, CopyOptions };
 use std::{
     path,
+    process,
     io::Write,
     { fs, fs::OpenOptions },
-    collections::{
-        HashMap,
-        HashSet,
-        VecDeque
-    },
+    collections::{ HashMap,HashSet,VecDeque },
 };
 
 use crate::{
+    cmd_exists,
     colored_name,
     colored_name_version,
-    colored_version
+    colored_version,
+    build_dir
 };
 
 use crate::{
@@ -27,6 +26,8 @@ use crate::{
         fetch_remote_registry_index,
         log_message,
         run_csound_script,
+        check_csound_installed,
+        check_csound_and_compare_versions,
         run_risset
     },
     parser::{
@@ -53,15 +54,11 @@ use crate::{
         LOCK_VERSION,
         DEFAULT_SRC_FOLDER,
         MANIFEST_FILE,
-        CS_MODULES_CACHE_FOLDER,
         CS_MODULE_META,
-        CS_MODULES_FOLDER,
         REMOTE_REGISTRY,
-        CS_CACHE_INDEX,
-        CS_MODULES_INDEX,
-        PROJECT_INFO_FILE,
         ProjectRoots,
         ProjectRootMode,
+        ProjectPaths,
         get_root,
         create_info_file,
         create_gitignore_file
@@ -81,6 +78,7 @@ pub fn create_project(p_name: String, module_flag: bool, global: bool) -> Result
 
     // create project info file
     create_info_file(&p, global)?;
+    log_message(MessageType::Info(format!("Use global modules folder: {}", global)), Some("CREATE"), true);
 
     // main script (entry point)
     let main_ext = if !module_flag { ".csd" } else { ".udo" };
@@ -89,8 +87,17 @@ pub fn create_project(p_name: String, module_flag: bool, global: bool) -> Result
     // create manifest
     log_message(MessageType::Info("Create Cspm.toml file".to_string()), Some("CREATE"), true);
 
+    // check if csound is installed
+    let cs_version: Option<String> = check_csound_installed();
+
     let manifest_file = p.join(MANIFEST_FILE);
-    let mft = MainPackage { name: p_name, version: String::from("0.1.0"), ..Default::default() };
+    let mft = MainPackage {
+        name: p_name,
+        version: String::from("0.1.0"),
+        cs_version: cs_version.unwrap_or("".to_string()),
+        ..Default::default()
+    };
+
     let mut main_entry = MainEntry { src: DEFAULT_SRC_FOLDER.to_string(), ..Default::default() };
 
     let main_template;
@@ -119,25 +126,21 @@ pub fn create_project(p_name: String, module_flag: bool, global: bool) -> Result
     log_message(MessageType::Info("Create .gitignore file".to_string()), Some("CREATE"), true);
     create_gitignore_file(&p)?;
 
+
     Ok(())
 }
 
 pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<()> {
-    let mut roots = ProjectRoots::new()?;
-    roots.set_modules_root()?;
+    let mut roots = ProjectRoots::new(false)?;
+    roots.set_modules_root(None)?;
 
-    let lpath = roots.project_root.join(LOCK_FILE);
+    let pths = ProjectPaths::new(&roots);
 
-    let cache_folder = roots.cache_root.join(CS_MODULES_CACHE_FOLDER);
-    let cache_index = cache_folder.join(CS_CACHE_INDEX);
-    let modules_folder = roots.modules_root.join(CS_MODULES_FOLDER);
-    let modules_index = modules_folder.join(CS_MODULES_INDEX);
-
-    if !cache_folder.is_dir() { fs::create_dir_all(&cache_folder)?; }
-    if !modules_folder.is_dir() { fs::create_dir_all(&modules_folder)?; }
+    build_dir!(&pths.cache_folder);
+    build_dir!(&pths.modules_folder);
 
     let mversion = ModuleTools::resolve_module_version(&name, version)?;
-    let manifest_toml = Manifest::open_toml(&roots.project_root.join(MANIFEST_FILE))?;
+    let manifest_toml = Manifest::open_toml(&pths.manifest_file)?;
 
     if let Some(internal_version) = manifest_toml.dependencies.get(name) {
         let parsed_internal_version = Version::parse(&internal_version)?;
@@ -164,10 +167,10 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
     }
 
     // load lockfile
-    let mut lockfile: LockFile = if !lpath.exists() {
+    let mut lockfile: LockFile = if !pths.lock_file.exists() {
         LockFile { version: LOCK_VERSION, ..Default::default() }
     } else {
-        LockFile::open_toml(&lpath)?
+        LockFile::open_toml(&pths.lock_file)?
     };
 
     log_message(
@@ -176,16 +179,16 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
         true
     );
 
-    let mut mindex = Registry::new(&modules_index, RegistryMode::ModulesMode);
-    let mut cindex = Registry::new(&cache_index, RegistryMode::CacheMode);
+    let mut mindex = Registry::new(&pths.modules_registry, RegistryMode::ModulesMode);
+    let mut cindex = Registry::new(&pths.cache_registry, RegistryMode::CacheMode);
 
     mindex.read_internal_registry()?;
     cindex.read_internal_registry()?;
 
     let mut visited = HashSet::new();
     resolve_dependencies(
-        &cache_folder,
-        &modules_folder,
+        &pths.cache_folder,
+        &pths.modules_folder,
         &name,
         &mversion,
         &mut visited,
@@ -212,7 +215,7 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
     update_manifest(&name, &mversion)?;
 
     // update manifest in memory
-    let re_manifest_toml = Manifest::open_toml(&roots.project_root.join(MANIFEST_FILE))?; // re-open after changes
+    let re_manifest_toml = Manifest::open_toml(&pths.manifest_file)?; // re-open after changes
 
     log_message(
         MessageType::Info("Update Cspm.lock file".to_string()),
@@ -231,13 +234,13 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
         ..Default::default()
     });
 
-    LockFile::write_toml(&lpath, &lockfile)?;
+    LockFile::write_toml(&pths.lock_file, &lockfile)?;
 
     Ok(())
 }
 
 fn update_manifest(pname: &str, version: &str) -> Result<()> {
-    let mpath = get_root(false, &ProjectRootMode::ModulesRoot)?.join(MANIFEST_FILE);
+    let mpath = get_root(false, &ProjectRootMode::ModulesRoot, false)?.join(MANIFEST_FILE);
     let mut manifest = Manifest::open_toml(&mpath)?;
 
     manifest.dependencies
@@ -343,7 +346,6 @@ pub fn resolve_dependencies(
 
     if let Some(lfile) = lockfile.as_mut() {
         // remove old dependencies and add child to lockfile
-
         log_message(
             MessageType::Info("Add child to Cspm.lock file and remove old dependencies".to_string()),
             Some("RESOLVE-DEPS"),
@@ -387,21 +389,19 @@ pub fn resolve_dependencies(
 }
 
 pub fn remove_package(pname: &str, force: bool) -> Result<()> {
-    let mut roots = ProjectRoots::new()?;
-    roots.set_modules_root()?;
+    let mut roots = ProjectRoots::new(false)?;
+    roots.set_modules_root(None)?;
 
-    let lpath = roots.project_root.join(LOCK_FILE);
-    let manifest_path = roots.project_root.join(MANIFEST_FILE);
-    let cs_modules_path = roots.modules_root.join(CS_MODULES_FOLDER);
+    let pths = ProjectPaths::new(&roots);
 
     // read manifest for deletion
-    let mut manifest_toml = Manifest::open_toml(&manifest_path)?;
+    let mut manifest_toml = Manifest::open_toml(&pths.manifest_file)?;
 
     // load lockfile
-    let mut lockfile: LockFile = if !lpath.exists() {
+    let mut lockfile: LockFile = if !pths.lock_file.exists() {
         LockFile { version: LOCK_VERSION, ..Default::default() }
     } else {
-        LockFile::open_toml(&lpath)?
+        LockFile::open_toml(&pths.lock_file)?
     };
 
     log_message(
@@ -413,14 +413,11 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
     match manifest_toml.dependencies.get(pname) {
         Some(_) => { },
         None => {
-
             log_message(
-                MessageType::Warning(format!("Undeclared module {} in Cspm.toml file", colored_name!(pname))),
+                MessageType::Warning(format!("Undeclared module {} in Cspm.toml file. Check if exists in cs_modules folder", colored_name!(pname))),
                 Some("REMOVE"),
                 true
             );
-
-            return Ok(())
         }
     };
 
@@ -452,11 +449,10 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
     }
 
     let pname_full = format!("{}@{}", pname, manifest_toml.package.version);
-    let mindex_path = roots.modules_root.join(CS_MODULES_FOLDER).join(CS_MODULES_INDEX);
-    let mut mindex = Registry::new(&mindex_path, RegistryMode::ModulesMode);
+    let mut mindex = Registry::new(&pths.modules_registry, RegistryMode::ModulesMode);
     mindex.read_internal_registry()?;
 
-    remove_helper(&cs_modules_path, &pname_full, force, &mut mindex, Some(&mut lockfile))?;
+    remove_helper(&pths.modules_folder, &pname_full, force, &mut mindex, Some(&mut lockfile))?;
 
     // update registry index
     log_message(
@@ -494,8 +490,8 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
         ..Default::default()
     });
 
-    LockFile::write_toml(&lpath, &lockfile)?;
-    Manifest::write_toml(&manifest_path, &manifest_toml)?;
+    LockFile::write_toml(&pths.lock_file, &lockfile)?;
+    Manifest::write_toml(&pths.manifest_file, &manifest_toml)?;
     Ok(())
 }
 
@@ -588,13 +584,13 @@ pub fn remove_helper(
 }
 
 pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
-    let mut roots = ProjectRoots::new()?;
-    roots.set_modules_root()?;
-    let mindex_path = roots.modules_root.join(CS_MODULES_INDEX);
-    let mut registry = Registry::new(&mindex_path, RegistryMode::ModulesMode);
+    let mut roots = ProjectRoots::new(false)?;
+    roots.set_modules_root(None)?;
+    let pths = ProjectPaths::new(&roots);
+    let mut registry = Registry::new(&pths.modules_registry, RegistryMode::ModulesMode);
     registry.read_internal_registry()?;
 
-    let manifest = Manifest::open_toml(&roots.project_root.join(MANIFEST_FILE))?;
+    let manifest = Manifest::open_toml(&pths.manifest_file)?;
     let installed_modules = manifest.dependencies;
 
     if let Some(mods) = &modules {
@@ -680,11 +676,11 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
 }
 
 pub fn sync_project() -> Result<()> {
-    let mut roots = ProjectRoots::new()?;
-    roots.set_modules_root()?;
+    let mut roots = ProjectRoots::new(true)?;
+    roots.set_modules_root(None)?;
+    let pths = ProjectPaths::new(&roots);
 
-    let manifest_toml: Manifest = Manifest::open_toml(&roots.project_root.join(MANIFEST_FILE))?;
-
+    let manifest_toml: Manifest = Manifest::open_toml(&pths.manifest_file)?;
     let indexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index()?;
 
     log_message(
@@ -704,8 +700,7 @@ pub fn sync_project() -> Result<()> {
         return Ok(())
     }
 
-    let mregistry_path = &roots.modules_root.join(CS_MODULES_FOLDER).join(CS_MODULES_INDEX);
-    let mut mregistry = Registry::new(&mregistry_path, RegistryMode::ModulesMode);
+    let mut mregistry = Registry::new(&pths.modules_registry, RegistryMode::ModulesMode);
     mregistry.read_internal_registry()?;
 
     for (d, v) in manifest_toml.dependencies.iter() {
@@ -770,35 +765,32 @@ pub fn sync_project() -> Result<()> {
 }
 
 pub fn build_from_manifest(global: bool) -> Result<()> {
-    let mut roots = ProjectRoots::new()?;
-    let lpath = roots.project_root.join(LOCK_FILE);
-
+    let mut roots = ProjectRoots::new(false)?;
     create_info_file(&roots.project_root, global)?;
-    roots.set_modules_root()?;
+    roots.set_modules_root(None)?;
+    let pths = ProjectPaths::new(&roots);
 
     // create .gitignore
     log_message(MessageType::Info("Create .gitignore file".to_string()), Some("BUILD"), true);
     create_gitignore_file(&roots.project_root)?;
 
-    let cache_folder = roots.cache_root.join(CS_MODULES_CACHE_FOLDER);
-    let cache_index = cache_folder.join(CS_CACHE_INDEX);
-    let modules_folder = roots.modules_root.join(CS_MODULES_FOLDER);
-    let modules_index = modules_folder.join(CS_MODULES_INDEX);
+    build_dir!(&pths.cache_folder);
+    build_dir!(&pths.modules_folder);
 
-    if !cache_folder.is_dir() { fs::create_dir_all(&cache_folder)?; }
-    if !modules_folder.is_dir() { fs::create_dir_all(&modules_folder)?; }
+    let manifest: Manifest = Manifest::open_toml(&pths.manifest_file)?;
 
-    let manifest: Manifest = Manifest::open_toml(&roots.project_root.join(MANIFEST_FILE))?;
+    // check csound and compare versions
+    check_csound_and_compare_versions(&manifest.package.cs_version);
 
     // load lockfile
-    let mut lockfile: LockFile = if !lpath.exists() {
+    let mut lockfile: LockFile = if !pths.lock_file.exists() {
         LockFile { version: LOCK_VERSION, ..Default::default() }
     } else {
-        LockFile::open_toml(&lpath)?
+        LockFile::open_toml(&pths.lock_file)?
     };
 
-    let mut mindex = Registry::new(&modules_index, RegistryMode::ModulesMode);
-    let mut cindex = Registry::new(&cache_index, RegistryMode::CacheMode);
+    let mut mindex = Registry::new(&pths.modules_registry, RegistryMode::ModulesMode);
+    let mut cindex = Registry::new(&pths.cache_registry, RegistryMode::CacheMode);
     mindex.read_internal_registry()?;
     cindex.read_internal_registry()?;
 
@@ -820,8 +812,8 @@ pub fn build_from_manifest(global: bool) -> Result<()> {
         );
 
         resolve_dependencies(
-            &cache_folder,
-            &modules_folder,
+            &pths.cache_folder,
+            &pths.modules_folder,
             name,
             &mversion,
             &mut visited,
@@ -890,23 +882,20 @@ pub fn build_from_manifest(global: bool) -> Result<()> {
         true
     );
 
-    LockFile::write_toml(&lpath, &lockfile)?;
+    LockFile::write_toml(&pths.manifest_file, &lockfile)?;
 
     Ok(())
 }
 
 pub fn build_from_lock(global: bool) -> Result<()> {
-    let mut roots = ProjectRoots::new()?;
-
+    let mut roots = ProjectRoots::new(false)?;
     create_info_file(&roots.project_root, global)?;
-    roots.set_modules_root()?;
+    roots.set_modules_root(None)?;
+    let pths = ProjectPaths::new(&roots);
 
     // create .gitignore
     log_message(MessageType::Info("Create .gitignore file".to_string()), Some("BUILD"), true);
     create_gitignore_file(&roots.project_root)?;
-
-    let mpath = roots.project_root.join(MANIFEST_FILE);
-    let lpath = roots.project_root.join(LOCK_FILE);
 
     log_message(
         MessageType::Info("Build project from Cspm.lock file".to_string()),
@@ -914,7 +903,7 @@ pub fn build_from_lock(global: bool) -> Result<()> {
         true
     );
 
-    if !lpath.exists() {
+    if !pths.lock_file.exists() {
         let mes_err = log_message(
             MessageType::Error("Cspm.lock file not found".to_string()),
             Some("BUILD"),
@@ -924,17 +913,16 @@ pub fn build_from_lock(global: bool) -> Result<()> {
         return Err(anyhow::anyhow!(mes_err));
     }
 
-    let manifest: Manifest = Manifest::open_toml(&mpath)?;
-    let lockfile: LockFile = LockFile::open_toml(&lpath)?;
+    let manifest: Manifest = Manifest::open_toml(&pths.manifest_file)?;
+    let lockfile: LockFile = LockFile::open_toml(&pths.lock_file)?;
 
-    let cache_folder = roots.cache_root.join(CS_MODULES_CACHE_FOLDER);
-    let modules_folder = roots.modules_root.join(CS_MODULES_FOLDER);
-    let modules_index_path = modules_folder.join(CS_MODULES_INDEX);
+    // check csound and compare versions
+    check_csound_and_compare_versions(&manifest.package.cs_version);
 
-    if !cache_folder.exists() { fs::create_dir_all(&cache_folder)?; }
-    if !modules_folder.exists() { fs::create_dir_all(&modules_folder)?; }
+    build_dir!(&pths.cache_folder);
+    build_dir!(&pths.modules_folder);
 
-    let mut mindex = Registry::new(&modules_index_path, RegistryMode::ModulesMode);
+    let mut mindex = Registry::new(&pths.modules_registry, RegistryMode::ModulesMode);
     mindex.read_internal_registry()?;
 
     log_message(
@@ -947,8 +935,8 @@ pub fn build_from_lock(global: bool) -> Result<()> {
         if pkg.name == manifest.package.name { continue; }
 
         let pfull_name = format!("{}@{}", pkg.name, pkg.version);
-        let cached_module = cache_folder.join(&pfull_name);
-        let local_module = modules_folder.join(&pkg.name);
+        let cached_module = pths.cache_folder.join(&pfull_name);
+        let local_module = pths.modules_folder.join(&pkg.name);
 
 
         if !cached_module.exists() {
@@ -960,7 +948,7 @@ pub fn build_from_lock(global: bool) -> Result<()> {
                 true
             );
 
-            download_package(&pkg.source, &pkg.name, &pkg.version, &cache_folder, &cached_module)?;
+            download_package(&pkg.source, &pkg.name, &pkg.version, &pths.cache_folder, &cached_module)?;
 
             let downloaded_checksum = ModuleTools::compute_checksum(&cached_module)?;
             if downloaded_checksum != pkg.checksum {
@@ -1079,10 +1067,24 @@ pub fn reinstall_module(modules: Vec<String>, force: bool) -> Result<()> {
 }
 
 pub fn run_project(csoptions: &Vec<String>) -> Result<()> {
-    let mut roots = ProjectRoots::new()?;
-    roots.set_modules_root()?;
 
-    let manifest: Manifest = Manifest::open_toml(&roots.project_root.join(MANIFEST_FILE))?;
+    if !cmd_exists!("csound") {
+        let mes_err = log_message(
+            MessageType::Error(
+                "Csound executable not found. Please install csound from <https://github.com/csound/csound/releases>".to_string()
+            ),
+            Some("RUN"),
+            false
+        );
+
+        return Err(anyhow::anyhow!(mes_err));
+    }
+
+    let mut roots = ProjectRoots::new(false)?;
+    roots.set_modules_root(None)?;
+    let pths = ProjectPaths::new(&roots);
+
+    let manifest: Manifest = Manifest::open_toml(&pths.manifest_file)?;
     let entry_point: (String, String) = manifest.main.get_entry_point()?;
 
     // check deps
@@ -1092,7 +1094,7 @@ pub fn run_project(csoptions: &Vec<String>) -> Result<()> {
         true
     );
 
-    Manifest::check_manifest_deps(&roots.modules_root.join(CS_MODULES_INDEX), &manifest)?;
+    Manifest::check_manifest_deps(&pths.modules_registry, &manifest)?;
 
     log_message(
         MessageType::Info("Project is in a healthy state".to_string()),
@@ -1115,13 +1117,6 @@ pub fn run_project(csoptions: &Vec<String>) -> Result<()> {
 pub fn install_plugins(rstoptions: &Vec<String>) -> Result<()> {
     // check if risset is installed
     check_risset()?;
-
-    // run risset
-    log_message(
-        MessageType::Info("Run plugins installation".to_string()),
-        Some("RISSET"),
-        true
-    );
 
     if let Ok(()) = run_risset(rstoptions) {
         let mut to_add = HashSet::new();
@@ -1147,52 +1142,54 @@ pub fn install_plugins(rstoptions: &Vec<String>) -> Result<()> {
             }
         };
 
-        if let Ok(proot) = get_root(false, &ProjectRootMode::ProjectRoot) {
-            let manifest_path = proot.join(MANIFEST_FILE);
-            let lockfile_path = proot.join(LOCK_FILE);
-            if manifest_path.exists() && manifest_path.is_file() {
+        if !to_add.is_empty() || !to_remove.is_empty() {
+            if let Ok(proot) = get_root(false, &ProjectRootMode::ProjectRoot, false) {
+                let manifest_path = proot.join(MANIFEST_FILE);
+                let lockfile_path = proot.join(LOCK_FILE);
+                if manifest_path.exists() && manifest_path.is_file() {
 
-                log_message(
-                    MessageType::Info("Update Cspm.toml".to_string()),
-                    Some("RISSET"),
-                    true
-                );
+                    log_message(
+                        MessageType::Info("Update Cspm.toml".to_string()),
+                        Some("RISSET"),
+                        true
+                    );
 
-                let mut mtoml = Manifest::open_toml(&manifest_path)?;
-                mtoml.plugins.extend(to_add.clone());
-                mtoml.plugins.retain(|plug| !to_remove.contains(plug));
+                    let mut mtoml = Manifest::open_toml(&manifest_path)?;
+                    mtoml.plugins.extend(to_add.clone());
+                    mtoml.plugins.retain(|plug| !to_remove.contains(plug));
 
-                // load lockfile
-                log_message(
-                    MessageType::Info("Update Cspm.lock".to_string()),
-                    Some("RISSET"),
-                    true
-                );
+                    // load lockfile
+                    log_message(
+                        MessageType::Info("Update Cspm.lock".to_string()),
+                        Some("RISSET"),
+                        true
+                    );
 
-                let mut lockfile: LockFile = if !lockfile_path.exists() {
-                    LockFile { version: LOCK_VERSION, ..Default::default() }
-                } else {
-                    LockFile::open_toml(&lockfile_path)?
-                };
+                    let mut lockfile: LockFile = if !lockfile_path.exists() {
+                        LockFile { version: LOCK_VERSION, ..Default::default() }
+                    } else {
+                        LockFile::open_toml(&lockfile_path)?
+                    };
 
-                lockfile.plugins.extend(to_add);
-                lockfile.plugins.retain(|plug| !to_remove.contains(plug));
+                    lockfile.plugins.extend(to_add);
+                    lockfile.plugins.retain(|plug| !to_remove.contains(plug));
 
-                log_message(
-                    MessageType::Info("Write Cspm.toml".to_string()),
-                    Some("RISSET"),
-                    true
-                );
+                    log_message(
+                        MessageType::Info("Write Cspm.toml".to_string()),
+                        Some("RISSET"),
+                        true
+                    );
 
-                Manifest::write_toml(&manifest_path, &mtoml)?;
+                    Manifest::write_toml(&manifest_path, &mtoml)?;
 
-                log_message(
-                    MessageType::Info("Write Cspm.lock".to_string()),
-                    Some("RISSET"),
-                    true
-                );
+                    log_message(
+                        MessageType::Info("Write Cspm.lock".to_string()),
+                        Some("RISSET"),
+                        true
+                    );
 
-                LockFile::write_toml(&lockfile_path, &lockfile)?;
+                    LockFile::write_toml(&lockfile_path, &lockfile)?;
+                }
             }
         }
     }
@@ -1201,13 +1198,11 @@ pub fn install_plugins(rstoptions: &Vec<String>) -> Result<()> {
 }
 
 pub fn publish_module() -> Result<()> {
-    let prj_root = get_root(false, &ProjectRootMode::ProjectRoot)?;
-    let mpath = prj_root.join(MANIFEST_FILE);
-    let lpath = prj_root.join(LOCK_FILE);
-    let modules_folder = prj_root.join(CS_MODULES_FOLDER);
-    let prj_conf = prj_root.join(PROJECT_INFO_FILE);
+    let mut roots = ProjectRoots::new(false)?;
+    roots.set_modules_root(Some(false))?;
+    let pths = ProjectPaths::new(&roots);
 
-    if !mpath.exists() {
+    if !pths.manifest_file.exists() {
         let mes_err = log_message(
             MessageType::Error(
                 "Cspm.toml not found. Are you in a valid cspm Csound project?".to_string()
@@ -1219,7 +1214,7 @@ pub fn publish_module() -> Result<()> {
         return Err(anyhow::anyhow!(mes_err));
     }
 
-    let mtoml: Manifest = Manifest::open_toml(&mpath)?;
+    let mtoml: Manifest = Manifest::open_toml(&pths.manifest_file)?;
     let name = mtoml.package.name;
     let version = mtoml.package.version;
     let authors = mtoml.package.authors;
@@ -1229,7 +1224,7 @@ pub fn publish_module() -> Result<()> {
     let mut warnings = 0;
     let mut errors = 0;
 
-    if !lpath.exists() {
+    if !pths.lock_file.exists() {
         log_message(MessageType::Warning("Cspm.lock file not found".to_string()), Some("PUBLISH"), true);
         warnings += 1;
     }
@@ -1280,7 +1275,7 @@ pub fn publish_module() -> Result<()> {
         }
     }
 
-    let spath = prj_root.join(src_folder.clone());
+    let spath = roots.project_root.join(src_folder.clone());
     if !spath.exists() {
         log_message(
             MessageType::Warning(format!("Source folder {} not found", src_folder.bold())),
@@ -1292,7 +1287,7 @@ pub fn publish_module() -> Result<()> {
     }
 
     for extra_file in include.iter() {
-        let pfile = prj_root.join(extra_file);
+        let pfile = roots.project_root.join(extra_file);
         if !pfile.exists() && pfile == spath {
             log_message(
                 MessageType::Error(
@@ -1307,7 +1302,7 @@ pub fn publish_module() -> Result<()> {
         }
     }
 
-    if !prj_root.join(".gitignore").exists() {
+    if !roots.project_root.join(".gitignore").exists() {
         log_message(
             MessageType::Error(
                 ".gitignore file not found. Create it and add cs_modules and .config.toml to prevent them from being committed.".to_string()
@@ -1318,7 +1313,7 @@ pub fn publish_module() -> Result<()> {
 
         errors += 1;
     } else {
-        let gitignore_content = fs::read_to_string(&prj_root.join(".gitignore"))?;
+        let gitignore_content = fs::read_to_string(&pths.gitignore_file)?;
         let text = gitignore_content
             .lines()
             .map(str::trim)
@@ -1328,7 +1323,7 @@ pub fn publish_module() -> Result<()> {
         let has_csmod = text.iter().any(|l| *l == "cs_modules" || *l == "/cs_modules");
         let has_prj = text.iter().any(|l| *l == ".config.toml");
 
-        if !has_csmod && modules_folder.exists() {
+        if !has_csmod && pths.modules_folder.exists() {
             log_message(
                 MessageType::Error(
                     "The cs_modules directory exists in this project. Add it to .gitignore".to_string()
@@ -1340,7 +1335,7 @@ pub fn publish_module() -> Result<()> {
             errors += 1;
         }
 
-        if !has_prj && prj_conf.exists() {
+        if !has_prj && pths.project_info_file.exists() {
             log_message(
                 MessageType::Error(
                     "The .config.toml file exists in this project. Add it to .gitignore".to_string()
@@ -1390,7 +1385,7 @@ pub fn publish_module() -> Result<()> {
 }
 
 pub fn validate_project() -> Result<()> {
-    let mut roots = ProjectRoots::new()?;
+    let mut roots = ProjectRoots::new(true)?;
 
     log_message(
         MessageType::Info("Check modules folder".to_string()),
@@ -1399,7 +1394,7 @@ pub fn validate_project() -> Result<()> {
     );
 
     let mut empty_mfolder = false;
-    if let Err(_) = roots.set_modules_root() {
+    if let Err(_) = roots.set_modules_root(None) {
         log_message(
             MessageType::Warning("Modules folder not found".to_string()),
             Some("VALIDATE"),
@@ -1408,9 +1403,9 @@ pub fn validate_project() -> Result<()> {
         empty_mfolder = true;
     }
 
-    let mfolder = roots.modules_root.join(CS_MODULES_FOLDER);
+    let pths = ProjectPaths::new(&roots);
     if !empty_mfolder {
-        if !mfolder.exists() || !mfolder.is_dir() {
+        if !pths.modules_folder.exists() || !pths.modules_folder.is_dir() {
             log_message(
                 MessageType::Warning("Empty modules folder".to_string()),
                 Some("VALIDATE"),
@@ -1426,8 +1421,7 @@ pub fn validate_project() -> Result<()> {
 
     }
 
-    let mindex_path = mfolder.join(CS_MODULES_INDEX);
-    let mut mindex = Registry::new(&mindex_path, RegistryMode::ModulesMode);
+    let mut mindex = Registry::new(&pths.modules_registry, RegistryMode::ModulesMode);
     mindex.read_internal_registry()?;
 
     log_message(
@@ -1436,8 +1430,7 @@ pub fn validate_project() -> Result<()> {
         true
     );
 
-    let manifest = roots.project_root.join(MANIFEST_FILE);
-    let mtoml = match Manifest::open_toml(&manifest) {
+    let mtoml = match Manifest::open_toml(&pths.manifest_file) {
         Ok(mnf) => mnf,
         Err(e) => {
             let mes_err = log_message(
@@ -1449,6 +1442,9 @@ pub fn validate_project() -> Result<()> {
             return Err(anyhow::anyhow!(mes_err))
         }
     };
+
+    // check csound and compare versions
+    check_csound_and_compare_versions(&mtoml.package.cs_version);
 
     let mut fix = false;
     if let Some(ref mregistry) = mindex.registry {
@@ -1502,10 +1498,9 @@ pub fn validate_project() -> Result<()> {
                 true
             );
 
-            fs::remove_dir_all(&mfolder)?;
-            let lockfile = roots.project_root.join(LOCK_FILE);
-            if lockfile.exists() { fs::remove_file(lockfile)?; }
-            let pinfo = ProjectInfo::open_toml(&roots.project_root.join(PROJECT_INFO_FILE))?;
+            fs::remove_dir_all(&pths.modules_folder)?;
+            if pths.lock_file.exists() { fs::remove_file(pths.lock_file)?; }
+            let pinfo = ProjectInfo::open_toml(&pths.project_info_file)?;
 
             log_message(
                 MessageType::Info("Rebuild project".to_string()),
@@ -1523,8 +1518,7 @@ pub fn validate_project() -> Result<()> {
         );
     }
 
-    let gitignore_path = roots.project_root.join(".gitignore");
-    if !gitignore_path.exists() {
+    if !pths.gitignore_file.exists() {
         log_message(
             MessageType::Warning(
                 ".gitignore file not found. Creating...".to_string()
@@ -1535,7 +1529,7 @@ pub fn validate_project() -> Result<()> {
 
         create_gitignore_file(&roots.project_root)?;
     } else {
-        let gitignore_content = fs::read_to_string(&gitignore_path)?;
+        let gitignore_content = fs::read_to_string(&pths.gitignore_file)?;
         let text = gitignore_content
             .lines()
             .map(str::trim)
@@ -1545,7 +1539,7 @@ pub fn validate_project() -> Result<()> {
         let has_csmod = text.iter().any(|l| *l == "cs_modules" || *l == "/cs_modules");
         let has_prj = text.iter().any(|l| *l == ".config.toml");
 
-        if !has_csmod && mfolder.exists() {
+        if !has_csmod && pths.modules_folder.exists() {
             log_message(
                 MessageType::Warning(
                     "The cs_modules directory exists in this project. Adding it to .gitignore".to_string()
@@ -1557,13 +1551,12 @@ pub fn validate_project() -> Result<()> {
             let mut gitig = OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(&gitignore_path)?;
+                .open(&pths.gitignore_file)?;
 
             writeln!(gitig, "cs_modules")?;
         }
 
-        let pinfo_path = roots.project_root.join(&PROJECT_INFO_FILE);
-        if !has_prj && pinfo_path.exists() {
+        if !has_prj && pths.project_info_file.exists() {
             log_message(
                 MessageType::Error(
                     "The .config.toml file exists in this project but not in .gitignore. Adding it to .gitignore".to_string()
@@ -1575,7 +1568,7 @@ pub fn validate_project() -> Result<()> {
             let mut gitig = OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(&gitignore_path)?;
+                .open(&pths.gitignore_file)?;
 
             writeln!(gitig, ".config.toml")?;
         }

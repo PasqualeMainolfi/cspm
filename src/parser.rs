@@ -283,6 +283,7 @@ pub struct MainPackage {
     pub repository: String,
     pub authors: Vec<String>,
     pub license: String,
+    pub cs_version: String,
     pub include: Vec<String>
 }
 
