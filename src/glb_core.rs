@@ -90,7 +90,7 @@ pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
 
     // cache list
     if list {
-        log_message(MessageType::Info("Cache status:".to_string()), Some("CACHE"), true);
+        log_message(MessageType::Info("Cache status".to_string()), Some("CACHE"), true);
         for entry in fs::read_dir(pths.cache_folder)? {
             let entry = entry?;
             let entry_path = entry.path();

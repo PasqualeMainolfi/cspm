@@ -5,7 +5,8 @@
 **cspm** is a modern, fast, and deterministic package manager for the [Csound](https://csound.com/), written in Rust.
 
 It brings modern dependency management (similar to `cargo` or `npm`) to the Csound ecosystem.  
-With `cspm`, you can easily initialize projects, manage third-party modules (UDOs), ensure reproducible builds via lockfiles, and publish your own DSP tools to the community.
+With `cspm`, you can easily initialize projects, manage third-party modules (UDOs), share and download modules from the community, and create fully reproducible projects through manifests and lockfiles. 
+This ensures that the exact same module versions are used across different systems and environments.
 
 ---
 
@@ -19,6 +20,7 @@ With `cspm`, you can easily initialize projects, manage third-party modules (UDO
 - **Module Discovery**: Search the registry to quickly find available modules and versions.
 - **TOML-based Manifests**: Clean and human-readable Cspm.toml files define your project configuration and dependencies.
 - **Built-in Runner**: Run your Csound projects directly with cspm run.
+- **Plugin Installation via Risset**: Install and manage Csound plugins directly through Risset, integrated into cspm.
 
 ---
 
@@ -50,6 +52,18 @@ cspm add module
 cspm add module1, module2, ...
 ```
 
+Run a `.csd` project
+
+```bash
+cspm run [cs_options]
+```
+
+Install plugins via risset
+
+```bash
+cspm risset install [plugin]
+```
+
 ## Cspm.toml file
 
 ```toml
@@ -59,6 +73,7 @@ version = "0.1.0"
 description = "An awesome FM synthesizer"
 authors =["<you@example.com>"]
 license = "MIT"
+cs_version = "7.0"
 include = ["src"]
 plugins = []
 
@@ -67,6 +82,7 @@ module1 = "1.0.0"
 module2 = "2.1.3"
 
 [main]
+src = "src"
 csd = "src/main.csd"
 # orc = "src/main.orc"
 # sco = "src/main.sco"
