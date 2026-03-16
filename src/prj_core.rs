@@ -44,10 +44,7 @@ use crate::{
         Version,
         Registry,
         ProjectInfo,
-        check_manifest_deps,
-        compute_checksum,
-        parse_module_name,
-        resolve_module_version
+        ModuleTools,
     },
     confres::{
         CSD_MAIN_TEMPLATE,
@@ -139,7 +136,7 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
     if !cache_folder.is_dir() { fs::create_dir_all(&cache_folder)?; }
     if !modules_folder.is_dir() { fs::create_dir_all(&modules_folder)?; }
 
-    let mversion = resolve_module_version(&name, version)?;
+    let mversion = ModuleTools::resolve_module_version(&name, version)?;
     let manifest_toml = Manifest::open_toml(&roots.project_root.join(MANIFEST_FILE))?;
 
     if let Some(internal_version) = manifest_toml.dependencies.get(name) {
@@ -284,7 +281,7 @@ pub fn resolve_dependencies(
         );
 
         download_package(&REMOTE_REGISTRY, mname, version, cfolder, &cached_module)?;
-        checksum = compute_checksum(&cached_module)?;
+        checksum = ModuleTools::compute_checksum(&cached_module)?;
         let cm = CacheMeta { source: REMOTE_REGISTRY.to_string(), checksum: checksum.clone() };
         let meta_json = serde_json::to_string_pretty(&cm)?;
         fs::write(meta_file_path, &meta_json)?;
@@ -435,7 +432,7 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
     );
 
     // check version if passed
-    let (_, check_version) = parse_module_name(pname);
+    let (_, check_version) = ModuleTools::parse_module_name(pname);
     if !check_version.is_empty() {
         if &check_version != &manifest_toml.package.version {
             let mes_err = log_message(
@@ -580,7 +577,7 @@ pub fn remove_helper(
 
                 mindex.remove_entry_from_registry(current.clone());
                 if let Some(lfile) = lockfile.as_mut() {
-                    let (pkg_name, pkg_version) = parse_module_name(&current);
+                    let (pkg_name, pkg_version) = ModuleTools::parse_module_name(&current);
                     lfile.package.retain(|p| !(p.name == pkg_name && p.version == pkg_version));
                 }
             }
@@ -622,7 +619,7 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
         for module in mods.iter() {
             if let Some(rvers) = registry.query_registry(&module) {
                 let parsed_registry_version = Version::parse(&rvers)?;
-                let latest_version = resolve_module_version(&module, Some(rvers.clone()))?;
+                let latest_version = ModuleTools::resolve_module_version(&module, Some(rvers.clone()))?;
                 match parsed_registry_version.compare(&Version::parse(&latest_version)?) {
                     VersionStatus::Young => {
                         log_message(
@@ -653,7 +650,7 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
     }
 
     for entry in to_update.iter() {
-        let (pname, pversion) = parse_module_name(entry);
+        let (pname, pversion) = ModuleTools::parse_module_name(entry);
 
         log_message(
             MessageType::Info(format!("Remove module {}", colored_name_version!(pname, pversion))),
@@ -814,7 +811,7 @@ pub fn build_from_manifest(global: bool) -> Result<()> {
     );
 
     for (name, version) in manifest.dependencies.iter() {
-        let mversion = resolve_module_version(name, Some(version.clone()))?;
+        let mversion = ModuleTools::resolve_module_version(name, Some(version.clone()))?;
 
         log_message(
             MessageType::Info("Check and resolve dependencies...".to_string()),
@@ -965,7 +962,7 @@ pub fn build_from_lock(global: bool) -> Result<()> {
 
             download_package(&pkg.source, &pkg.name, &pkg.version, &cache_folder, &cached_module)?;
 
-            let downloaded_checksum = compute_checksum(&cached_module)?;
+            let downloaded_checksum = ModuleTools::compute_checksum(&cached_module)?;
             if downloaded_checksum != pkg.checksum {
                 fs::remove_dir_all(&cached_module)?;
                 let mes_err = log_message(
@@ -1073,7 +1070,7 @@ pub fn reinstall_module(modules: Vec<String>, force: bool) -> Result<()> {
             true
         );
 
-        let (mname, mversion) = parse_module_name(module);
+        let (mname, mversion) = ModuleTools::parse_module_name(module);
         let version = if !mversion.is_empty() { Some(mversion) } else { None };
         add_package(&mname, version, force)?;
     }
@@ -1095,7 +1092,7 @@ pub fn run_project(csoptions: &Vec<String>) -> Result<()> {
         true
     );
 
-    check_manifest_deps(&roots.modules_root.join(CS_MODULES_INDEX), &manifest)?;
+    Manifest::check_manifest_deps(&roots.modules_root.join(CS_MODULES_INDEX), &manifest)?;
 
     log_message(
         MessageType::Info("Project is in a healthy state".to_string()),

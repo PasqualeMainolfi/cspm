@@ -21,8 +21,7 @@ use crate::parser::{
     ManageToml,
     Version,
     Registry,
-    parse_module_name,
-    resolve_module_version,
+    ModuleTools,
 };
 
 use crate::confres::{
@@ -142,9 +141,9 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
     let mut module_registry = Registry::new(&modules_index, RegistryMode::ModulesMode);
     module_registry.read_internal_registry()?;
 
-    let (name, version) = parse_module_name(&module);
+    let (name, version) = ModuleTools::parse_module_name(&module);
     let version = if !version.is_empty() { Some(version) } else { None };
-    let mversion = resolve_module_version(&name, version)?;
+    let mversion = ModuleTools::resolve_module_version(&name, version)?;
 
     let rvers = module_registry.query_registry(&name);
     if let Some(internal_version) = rvers {
@@ -216,7 +215,7 @@ pub fn uninstall_globally(module: String, force: bool) -> Result<()> {
     let mut mregistry = Registry::new(&mindex_path, RegistryMode::ModulesMode);
     mregistry.read_internal_registry()?;
 
-    let (name, mut version) = parse_module_name(&module);
+    let (name, mut version) = ModuleTools::parse_module_name(&module);
     if version.is_empty() {
         match mregistry.query_registry(&name) {
             Some(v) => version = v,
@@ -272,7 +271,7 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
         for module in mods.iter() {
             if let Some(rvers) = mregistry.query_registry(&module) {
                 let parsed_registry_version = Version::parse(&rvers)?;
-                let latest_version = resolve_module_version(&module, Some(rvers.clone()))?;
+                let latest_version = ModuleTools::resolve_module_version(&module, Some(rvers.clone()))?;
                 match parsed_registry_version.compare(&Version::parse(&latest_version)?) {
                     VersionStatus::Young => {
                         log_message(
@@ -314,7 +313,7 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
             true
         );
 
-        let (pkg_name, pkg_version) = parse_module_name(&entry);
+        let (pkg_name, pkg_version) = ModuleTools::parse_module_name(&entry);
 
         log_message(
             MessageType::Info(format!("Remove module {}", colored_name!(pkg_name))),
