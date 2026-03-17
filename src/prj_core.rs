@@ -86,7 +86,7 @@ pub fn create_project(p_name: String, module_flag: bool, global: bool) -> Result
     log_message(MessageType::Info(format!("Use global modules folder: {}", global)), Some("CREATE"), true);
 
     // main script (entry point)
-    let (main_ext, project_mode) = if !module_flag { (".csd", "cs_project") } else { (".udo", "cs_module") };
+    let (main_ext, project_mode) = if !module_flag { (".csd", "cs-project") } else { (".udo", "cs-module") };
     let main_script = format!("{}{}", p_name, main_ext);
 
     // create manifest

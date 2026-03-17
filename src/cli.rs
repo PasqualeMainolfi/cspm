@@ -2,7 +2,7 @@ use clap::{ Parser, Subcommand };
 
 #[derive(Parser)]
 #[command(name = "cspm")]
-#[command(about = "A modern package manager for Csound")]
+#[command(about = "[cspm]: a modern package manager for Csound")]
 pub struct CsCli {
 
     #[command(subcommand)]
