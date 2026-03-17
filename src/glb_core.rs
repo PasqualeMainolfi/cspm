@@ -45,7 +45,7 @@ pub fn search_package(module_name: &str) -> Result<()> {
     let pindexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index(REMOTE_PREGISTRY_INDEX)?;
 
     log_message(
-        MessageType::Warning("Look at modules registry...".to_string()),
+        MessageType::Info("Look at modules registry...".to_string()),
         Some("SEARCH"),
         true
     );
@@ -55,6 +55,7 @@ pub fn search_package(module_name: &str) -> Result<()> {
             println!();
             println!("📦 {}", colored_name!(module_name));
             println!("  ├─ Versions: {}", pkg.versions.join(", "));
+            println!("  ├─ Authors: {}", pkg.authors.join(", "));
             println!("  └─ Description: {}", pkg.description);
             println!();
         },
@@ -68,7 +69,7 @@ pub fn search_package(module_name: &str) -> Result<()> {
     }
 
     log_message(
-        MessageType::Warning("Look at projects registry...".to_string()),
+        MessageType::Info("Look at projects registry...".to_string()),
         Some("SEARCH"),
         true
     );
@@ -78,6 +79,7 @@ pub fn search_package(module_name: &str) -> Result<()> {
             println!();
             println!("📁 {}", colored_name!(module_name));
             println!("  ├─ Versions: {}", pkg.versions.join(", "));
+            println!("  ├─ Authors: {}", pkg.authors.join(", "));
             println!("  └─ Description: {}", pkg.description);
             println!();
         },
