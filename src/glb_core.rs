@@ -44,12 +44,19 @@ pub fn search_package(module_name: &str) -> Result<()> {
     let mindexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index(REMOTE_MREGISTRY_INDEX)?;
     let pindexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index(REMOTE_PREGISTRY_INDEX)?;
 
+    log_message(
+        MessageType::Warning("Look at modules registry...".to_string()),
+        Some("SEARCH"),
+        true
+    );
+
     match mindexes.get(module_name) {
         Some(pkg) => {
             println!();
             println!("📦 {}", colored_name!(module_name));
             println!("  ├─ Versions: {}", pkg.versions.join(", "));
             println!("  └─ Description: {}", pkg.description);
+            println!();
         },
         None => {
             log_message(
@@ -60,12 +67,19 @@ pub fn search_package(module_name: &str) -> Result<()> {
         }
     }
 
+    log_message(
+        MessageType::Warning("Look at projects registry...".to_string()),
+        Some("SEARCH"),
+        true
+    );
+
     match pindexes.get(module_name) {
         Some(pkg) => {
             println!();
             println!("📁 {}", colored_name!(module_name));
             println!("  ├─ Versions: {}", pkg.versions.join(", "));
             println!("  └─ Description: {}", pkg.description);
+            println!();
         },
         None => {
             log_message(
@@ -126,6 +140,7 @@ pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
                 println!();
                 println!("🗂️  {}", colored_name_version!(pname, pversion));
                 println!("  ├─ Dependencies: {}", deps_format);
+                println!();
             }
         }
         println!("");
