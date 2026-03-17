@@ -3,10 +3,11 @@ use serde_json::Value;
 use colored::*;
 use std::{ collections::{ HashSet, HashMap }, fs };
 use crate::{
+    build_dir,
     colored_name,
     colored_name_version,
     colored_version,
-    build_dir
+    pkg_full_name
 };
 
 use crate::{
@@ -141,7 +142,7 @@ pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
 
                 println!();
                 println!("🗂️  {}", colored_name_version!(pname, pversion));
-                println!("  ├─ Dependencies: {}", deps_format);
+                println!("  └─ Dependencies: {}", deps_format);
                 println!();
             }
         }
@@ -266,7 +267,7 @@ pub fn uninstall_globally(module: String, force: bool) -> Result<()> {
     );
 
     // delete from modules (also dependencies)
-    let full_name = format!("{}@{}", name, version);
+    let full_name = pkg_full_name!(name, version);
     remove_helper(&pths.modules_folder, &full_name, force, &mut mregistry, None)?;
 
     // update registry index
@@ -305,7 +306,7 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
 
                     },
                     VersionStatus::Old => {
-                        to_update.insert(format!("{}@{}", module.clone(), latest_version));
+                        to_update.insert(pkg_full_name!( module.clone(), latest_version));
                     },
                     VersionStatus::Same => {
                         log_message(

@@ -15,7 +15,8 @@ use crate::{
     cmd_exists,
     colored_name,
     colored_name_version,
-    colored_version
+    colored_version,
+    pkg_full_name
 };
 
 use crate::{
@@ -27,10 +28,9 @@ use crate::{
         log_message,
         run_csound_script,
         check_csound_installed,
-        check_csound_and_compare_versions,
         run_risset,
         download_from_remote_registry,
-        check_module_mode
+        check_gitignore
     },
     parser::{
         CacheMeta,
@@ -131,7 +131,6 @@ pub fn create_project(p_name: String, module_flag: bool, global: bool) -> Result
     // create .gitignore
     log_message(MessageType::Info("Create .gitignore file".to_string()), Some("CREATE"), true);
     create_gitignore_file(&p)?;
-
 
     Ok(())
 }
@@ -235,7 +234,7 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
         version: re_manifest_toml.package.version,
         dependencies: re_manifest_toml.dependencies
             .iter()
-            .map(|(d, v)| format!("{}@{}", d, v))
+            .map(|(d, v)| pkg_full_name!(d, v))
             .collect(),
         ..Default::default()
     });
@@ -270,7 +269,7 @@ pub fn resolve_dependencies(
     mut lockfile: Option<&mut LockFile>
 ) -> Result<()>
 {
-    let pfull_name = format!("{}@{}", mname, version);
+    let pfull_name = pkg_full_name!(mname, version);
     if !visited.insert(pfull_name.clone()) { return Ok(()); }
 
     let cached_module = cfolder.join(&pfull_name);
@@ -367,7 +366,7 @@ pub fn resolve_dependencies(
             checksum,
             dependencies: mod_manifest.dependencies
                 .iter()
-                .map(|(d, v)| format!("{}@{}", d, v))
+                .map(|(d, v)| pkg_full_name!(d, v))
                 .collect(),
         });
     }
@@ -454,7 +453,7 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
         }
     }
 
-    let pname_full = format!("{}@{}", pname, manifest_toml.package.version);
+    let pname_full = pkg_full_name!(pname, manifest_toml.package.version);
     let mut mindex = Registry::new(&pths.modules_registry, RegistryMode::ModulesMode);
     mindex.read_internal_registry()?;
 
@@ -491,7 +490,7 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
         version: manifest_toml.package.version.clone(),
         dependencies: manifest_toml.dependencies
             .iter()
-            .map(|(d, v)| format!("{}@{}", d, v))
+            .map(|(d, v)| pkg_full_name!(d, v))
             .collect(),
         ..Default::default()
     });
@@ -558,7 +557,7 @@ pub fn remove_helper(
             if manifest_path.exists() {
                 let mtoml = Manifest::open_toml(&manifest_path)?;
                 for (dep, ver) in mtoml.dependencies.iter() {
-                    let full_name = format!("{}@{}", dep, ver);
+                    let full_name = pkg_full_name!(dep, ver);
                     queue.push_back(full_name);
                 }
             }
@@ -786,7 +785,7 @@ pub fn build_from_manifest(global: bool) -> Result<()> {
     let manifest: Manifest = Manifest::open_toml(&pths.manifest_file)?;
 
     // check csound and compare versions
-    check_csound_and_compare_versions(&manifest.package.cs_version);
+    manifest.check_csound_versions();
 
     // load lockfile
     let mut lockfile: LockFile = if !pths.lock_file.exists() {
@@ -877,7 +876,7 @@ pub fn build_from_manifest(global: bool) -> Result<()> {
         version: manifest.package.version.clone(),
         dependencies: manifest.dependencies.clone()
             .iter()
-            .map(|(d, v)| format!("{}@{}", d, v))
+            .map(|(d, v)| pkg_full_name!(d, v))
             .collect(),
         ..Default::default()
     });
@@ -923,7 +922,7 @@ pub fn build_from_lock(global: bool) -> Result<()> {
     let lockfile: LockFile = LockFile::open_toml(&pths.lock_file)?;
 
     // check csound and compare versions
-    check_csound_and_compare_versions(&manifest.package.cs_version);
+    manifest.check_csound_versions();
 
     build_dir!(&pths.cache_folder);
     build_dir!(&pths.modules_folder);
@@ -940,7 +939,7 @@ pub fn build_from_lock(global: bool) -> Result<()> {
     for pkg in lockfile.package.iter() {
         if pkg.name == manifest.package.name { continue; }
 
-        let pfull_name = format!("{}@{}", pkg.name, pkg.version);
+        let pfull_name = pkg_full_name!(pkg.name, pkg.version);
         let cached_module = pths.cache_folder.join(&pfull_name);
         let local_module = pths.modules_folder.join(&pkg.name);
 
@@ -1093,8 +1092,8 @@ pub fn run_project(csoptions: &Vec<String>) -> Result<()> {
     let manifest: Manifest = Manifest::open_toml(&pths.manifest_file)?;
     let entry_point: (String, String) = manifest.main.get_entry_point()?;
 
-    if &manifest.package.mode == "cs_module" {
-        let mes_err = log_message(MessageType::Error("Csound documente declared as [cs_module] in Cspm.toml file. Nothing to run".to_string()), Some("RUN"), false);
+    if &manifest.package.mode == "cs-module" {
+        let mes_err = log_message(MessageType::Error("Csound document declared as [cs-module] in Cspm.toml file. Nothing to run".to_string()), Some("RUN"), false);
         return Err(anyhow::anyhow!(mes_err))
     }
 
@@ -1105,7 +1104,7 @@ pub fn run_project(csoptions: &Vec<String>) -> Result<()> {
         true
     );
 
-    Manifest::check_manifest_deps(&pths.modules_registry, &manifest)?;
+    manifest.check_manifest_deps(&pths.modules_registry)?;
 
     log_message(
         MessageType::Info("Project is in a healthy state".to_string()),
@@ -1229,32 +1228,19 @@ pub fn publish_module() -> Result<()> {
     let name = &mtoml.package.name;
     let version = &mtoml.package.version;
     let authors = &mtoml.package.authors;
-    let include = &mtoml.package.include;
-    let src_folder = &mtoml.main.src;
-
 
     let mut warnings = 0;
     let mut errors = 0;
 
     // check for declared mode
-    if !check_module_mode(&mtoml) { warnings += 1; }
+    if !mtoml.check_module_mode() { warnings += 1; }
 
     if !pths.lock_file.exists() {
         log_message(MessageType::Warning("Cspm.lock file not found".to_string()), Some("PUBLISH"), true);
         warnings += 1;
     }
 
-
-    if name.is_empty() || version.is_empty() || authors.is_empty() {
-        log_message(
-            MessageType::Error(
-                "Name, version and authors of the module or project must be specified in Cspm.toml file".to_string()
-            ),
-            Some("PUBLISH"),
-            true
-        );
-        errors += 1;
-    }
+    if !mtoml.mandatory_fields_exists() { errors += 1; }
 
     log_message(MessageType::Info("Check version format".to_string()), Some("PUBLISH"), true);
     Version::parse(&version)?;
@@ -1304,78 +1290,9 @@ pub fn publish_module() -> Result<()> {
         }
     }
 
-    let spath = roots.project_root.join(src_folder.clone());
-    if !spath.exists() {
-        log_message(
-            MessageType::Warning(format!("Source folder {} not found", src_folder.bold())),
-            Some("PUBLISH"),
-            true
-        );
-
-        warnings += 1;
-    }
-
-    for extra_file in include.iter() {
-        let pfile = roots.project_root.join(extra_file);
-        if !pfile.exists() && pfile == spath {
-            log_message(
-                MessageType::Error(
-                    format!(
-                        "Included {} file in Cspm.toml not found", (pfile.to_string_lossy().to_string()).bold())
-                ),
-                Some("PUBLISH"),
-                true
-            );
-
-            warnings += 1;
-        }
-    }
-
-    if !roots.project_root.join(".gitignore").exists() {
-        log_message(
-            MessageType::Error(
-                ".gitignore file not found. Create it and add cs_modules and .config.toml to prevent them from being committed.".to_string()
-            ),
-            Some("PUBLISH"),
-            true
-        );
-
-        errors += 1;
-    } else {
-        let gitignore_content = fs::read_to_string(&pths.gitignore_file)?;
-        let text = gitignore_content
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.starts_with('#'))
-            .collect::<Vec<&str>>();
-
-        let has_csmod = text.iter().any(|l| *l == "cs_modules" || *l == "/cs_modules");
-        let has_prj = text.iter().any(|l| *l == ".config.toml");
-
-        if !has_csmod && pths.modules_folder.exists() {
-            log_message(
-                MessageType::Error(
-                    "The cs_modules directory exists in this project. Add it to .gitignore".to_string()
-                ),
-                Some("PUBLISH"),
-                true
-            );
-
-            errors += 1;
-        }
-
-        if !has_prj && pths.project_info_file.exists() {
-            log_message(
-                MessageType::Error(
-                    "The .config.toml file exists in this project. Add it to .gitignore".to_string()
-                ),
-                Some("PUBLISH"),
-                true
-            );
-
-            errors += 1;
-        }
-    }
+    if !mtoml.src_exists(&roots.project_root) { warnings += 1; }
+    if !mtoml.included_files_exists(&roots.project_root) { warnings += 1; }
+    if let Err(_) = check_gitignore(&pths) { errors += 1; }
 
     let warnings_string = format!("{} WARNINGS", warnings);
     let errors_string = format!("{} ERRORS", errors);
@@ -1473,10 +1390,9 @@ pub fn validate_project() -> Result<()> {
     };
 
     // check for declared mode
-    check_module_mode(&mtoml);
-
+    mtoml.check_module_mode();
     // check csound and compare versions
-    check_csound_and_compare_versions(&mtoml.package.cs_version);
+    mtoml.check_csound_versions();
 
     let mut fix = false;
     if let Some(ref mregistry) = mindex.registry {

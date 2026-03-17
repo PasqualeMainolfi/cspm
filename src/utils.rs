@@ -2,11 +2,9 @@ use anyhow::Result;
 use colored::*;
 use regex::Regex;
 use std::{ fs, path, process, env, collections::HashMap };
-use crate::parser::Manifest;
-use crate::{ colored_name, colored_version, cmd_exists };
-use crate::{
-    parser::{ RemoteRegistryIndex, GitHubItem },
-};
+use crate::confres::ProjectPaths;
+use crate::{ colored_name, cmd_exists };
+use crate::parser::{ RemoteRegistryIndex, GitHubItem };
 
 
 pub enum MessageType {
@@ -149,30 +147,6 @@ pub fn check_csound_installed() -> Option<String> {
     }
 }
 
-pub fn check_csound_and_compare_versions(declared_version: &str) {
-    let cs_version = check_csound_installed();
-    match cs_version {
-        Some(v) => if v != declared_version {
-            log_message(
-                MessageType::Warning(
-                    format!("Declared Csound version {} in Cspm.toml file and the one detected {} are different", colored_version!(declared_version), colored_version!(v))
-                ),
-                Some("BUILD"),
-                true
-            );
-        },
-        None => {
-            log_message(
-                MessageType::Warning(
-                    "Csound version not found".to_string()
-                ),
-                Some("BUILD"),
-                true
-            );
-        }
-    }
-}
-
 pub fn run_csound_script(entry_point: &(String, String), cs_options: &Vec<String>) -> Result<()> {
     let (file1, file2) = entry_point;
     let mut c = process::Command::new("csound");
@@ -268,27 +242,51 @@ pub fn run_risset(rst_options: &Vec<String>) -> Result<()> {
     Ok(())
 }
 
-pub fn check_module_mode(mtoml: &Manifest) -> bool {
-    match mtoml.package.mode.as_str() {
-        "cs-module" => {
-            if mtoml.main.udo.is_none() {
-                log_message(MessageType::Warning("Declared as cs-module, but entry point .udo not found".to_string()), Some("VALIDATE"), true);
-                return false;
-            }
-        },
-        "cs-project" => {
-            if mtoml.main.csd.is_none() || (mtoml.main.orc.is_none() && mtoml.main.sco.is_none()) {
-                log_message(MessageType::Warning("Declared as cs-project, but entry point .csd or orc/sco not found".to_string()), Some("VALIDATE"), true);
-                return false
-            }
+pub fn check_gitignore(paths: &ProjectPaths) -> Result<()> {
+    let mut flag = false;
+    if !paths.gitignore_file.exists() {
+        log_message(
+            MessageType::Error(
+                ".gitignore file not found. Create it and add cs_modules and .config.toml to prevent them from being committed.".to_string()
+            ),
+            None,
+            true
+        );
+        flag = true;
+    } else {
+        let gitignore_content = fs::read_to_string(&paths.gitignore_file)?;
+        let text = gitignore_content
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with('#'))
+            .collect::<Vec<&str>>();
+
+        let has_csmod = text.iter().any(|l| *l == "cs_modules" || *l == "/cs_modules");
+        let has_prj = text.iter().any(|l| *l == ".config.toml");
+
+        if !has_csmod && paths.modules_folder.exists() {
+            log_message(
+                MessageType::Error(
+                    "The cs_modules directory exists in this project. Add it to .gitignore".to_string()
+                ),
+                None,
+                true
+            );
+            flag = true;
         }
-        _ => {
-            if mtoml.main.csd.is_none() || (mtoml.main.orc.is_none() && mtoml.main.sco.is_none()) {
-                log_message(MessageType::Warning("Document mode in Cspm.toml file must be 'cs-module' or 'cs-project'".to_string()), Some("VALIDATE"), true);
-                return false
-            }
+
+        if !has_prj && paths.project_info_file.exists() {
+            log_message(
+                MessageType::Error(
+                    "The .config.toml file exists in this project. Add it to .gitignore".to_string()
+                ),
+                None,
+                true
+            );
+            flag = true;
         }
     }
 
-    true
+    if flag { return Err(anyhow::anyhow!("Invalid .gitignore file")) }
+    Ok(())
 }

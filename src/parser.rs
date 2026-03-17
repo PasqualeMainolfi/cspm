@@ -4,9 +4,20 @@ use sha2::{ Sha256, Digest };
 use walkdir::WalkDir;
 use colored::*;
 use crate::confres::REMOTE_MREGISTRY_INDEX;
-use crate::{ colored_name, colored_version, colored_name_version };
-use crate::utils::{ MessageType, log_message, fetch_remote_registry_index };
 use std::{ collections::{ HashMap, HashSet }, fs, path };
+use crate::{
+    colored_name,
+    colored_name_version,
+    colored_version,
+    pkg_full_name
+};
+
+use crate::utils::{
+    MessageType,
+    log_message,
+    fetch_remote_registry_index,
+    check_csound_installed
+};
 
 
 pub trait ManageToml {
@@ -202,13 +213,13 @@ pub struct Manifest {
 }
 
 impl Manifest {
-    pub fn check_manifest_deps(modules_folder: &path::Path, manifest: &Manifest) -> Result<()> {
+    pub fn check_manifest_deps(&self, modules_folder: &path::Path) -> Result<()> {
         let mut registry = Registry::new(modules_folder, RegistryMode::ModulesMode);
         registry.read_internal_registry()?;
         if let Some(rdata) = registry.registry {
             match rdata {
                 RegistryData::ModulesRegistry(data) => {
-                    for (d, v) in manifest.dependencies.iter() {
+                    for (d, v) in self.dependencies.iter() {
                         if let Some(rvers) = data.get(d) {
                             if v != rvers {
 
@@ -259,6 +270,116 @@ impl Manifest {
 
         Ok(())
     }
+
+    pub fn mandatory_fields_exists(&self) -> bool {
+        if self.package.name.is_empty() ||self.package.version.is_empty() ||self.package.authors.is_empty() ||self.package.mode.is_empty() {
+            log_message(
+                MessageType::Error(
+                    "Name, version and authors of the module or project must be specified in Cspm.toml file".to_string()
+                ),
+                None,
+                true
+            );
+            return false
+        }
+        true
+    }
+
+    pub fn src_exists(&self, proot: &path::Path) -> bool {
+        let spath = proot.join(&self.main.src);
+        if !spath.exists() {
+            log_message(
+                MessageType::Warning(format!("Source folder {} not found", self.main.src.bold())),
+                None,
+                true
+            );
+            return false;
+        }
+        true
+    }
+
+    pub fn included_files_exists(&self, proot: &path::Path) -> bool {
+        let spath = proot.join(&self.main.src);
+        if !self.src_exists(proot) { return false }
+        let mut flag = false;
+        for extra_file in self.package.include.iter() {
+            let pfile = proot.join(extra_file);
+            if !pfile.exists() && pfile == spath {
+                log_message(
+                    MessageType::Error(
+                        format!(
+                            "Included {} file in Cspm.toml not found", (pfile.to_string_lossy().to_string()).bold())
+                    ),
+                    None,
+                    true
+                );
+                flag = true
+            }
+        }
+
+        if flag { return false }
+        true
+    }
+
+    pub fn check_module_mode(&self) -> bool {
+        match self.package.mode.as_str() {
+            "cs-module" => {
+                if self.main.udo.is_none() {
+                    log_message(MessageType::Warning("Declared as cs-module, but entry point .udo not found".to_string()), Some("VALIDATE"), true);
+                    return false;
+                }
+            },
+            "cs-project" => {
+                if self.main.csd.is_none() || (self.main.orc.is_none() && self.main.sco.is_none()) {
+                    log_message(MessageType::Warning("Declared as cs-project, but entry point .csd or orc/sco not found".to_string()), Some("VALIDATE"), true);
+                    return false
+                }
+            }
+            _ => {
+                if self.main.csd.is_none() || (self.main.orc.is_none() && self.main.sco.is_none()) {
+                    log_message(MessageType::Warning("Document mode in Cspm.toml file must be 'cs-module' or 'cs-project'".to_string()), Some("VALIDATE"), true);
+                    return false
+                }
+            }
+        }
+
+        true
+    }
+
+    pub fn check_csound_versions(&self) -> bool {
+        let cs_version = check_csound_installed();
+        match cs_version {
+            Some(v) => {
+                if v != self.package.cs_version {
+                    log_message(
+                        MessageType::Warning(
+                            format!(
+                                "Declared Csound version {} in Cspm.toml file and the one detected {} are different",
+                                colored_version!(self.package.cs_version),
+                                colored_version!(v)
+                            )
+                        ),
+                        Some("BUILD"),
+                        true
+                    );
+                    return false
+                }
+            },
+            None => {
+                log_message(
+                    MessageType::Warning(
+                        "Csound version not found".to_string()
+                    ),
+                    Some("BUILD"),
+                    true
+                );
+                return false
+            }
+        }
+
+        true
+    }
+
 }
 
 impl ManageToml for Manifest {
@@ -438,7 +559,7 @@ impl Registry {
         if let Some(ref registry) = self.registry {
             match registry {
                 RegistryData::ModulesRegistry(data) => {
-                    return data.iter().map(|(d, v)| format!("{}@{}", d, v)).collect::<HashSet<String>>()
+                    return data.iter().map(|(d, v)| pkg_full_name!(d, v)).collect::<HashSet<String>>()
                 },
                 RegistryData::CacheRegistry(_) => { }
             }
@@ -525,7 +646,6 @@ impl ModuleTools {
     }
 
 }
-
 
 pub enum VersionStatus {
     Same,

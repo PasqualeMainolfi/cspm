@@ -27,12 +27,19 @@ macro_rules! cmd_exists {
             .output()
             .map(|out| out.status.success())
             .unwrap_or(false)
-    };
+    }
 }
 
 #[macro_export]
 macro_rules! build_dir {
     ($pth:expr) => {
-        (if !$pth.is_dir() { fs::create_dir_all($pth)?; })
+        (if !$pth.is_dir() { fs::create_dir_all($pth)? })
+    };
+}
+
+#[macro_export]
+macro_rules! pkg_full_name {
+    ($name:expr, $vers:expr) => {
+        (format!("{}@{}", $name, $vers))
     };
 }

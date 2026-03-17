@@ -64,7 +64,7 @@ Install plugins via risset
 cspm risset install [plugin]
 ```
 
-Or, you can download a shared `.csd` or `orc/sco` Csound project. And build it from manifest or lock file
+Or, you can download a shared `.csd` or `orc/sco` Csound project and build it from manifest or lock file
 
 ```bash
 cspm take [project]
@@ -76,14 +76,14 @@ cspm build
 
 ```toml
 [package]
-name = "my_synth"
+name = "my_synth" # name of module/project
 version = "0.1.0"
-mode = "cs-module"
+mode = "cs-module" # package mode: cs-module (.udo) or cs-project (.csd or .orc/.sco)
 description = "An awesome FM synthesizer"
 authors =["<you@example.com>"]
 license = "MIT"
-cs_version = "7.0"
-include = ["src"]
+cs_version = "7.0" # csound version
+include = ["src"] # files/folders to include in the package
 plugins = []
 
 [dependencies]
@@ -91,8 +91,8 @@ module1 = "1.0.0"
 module2 = "2.1.3"
 
 [main]
-src = "src"
-csd = "src/main.csd"
+src = "src" # main folder
+csd = "src/main.csd" # entry point
 # orc = "src/main.orc"
 # sco = "src/main.sco"
 ```
