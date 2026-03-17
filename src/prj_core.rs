@@ -1607,7 +1607,7 @@ pub fn validate_project() -> Result<()> {
     }
 
     log_message(
-        MessageType::Info("Now the project is in healthy status".to_string()),
+        MessageType::Info("The project is in healthy status".to_string()),
         Some("VALIDATE"),
         true
     );
