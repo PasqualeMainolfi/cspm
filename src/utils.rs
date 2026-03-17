@@ -2,10 +2,10 @@ use anyhow::Result;
 use colored::*;
 use regex::Regex;
 use std::{ fs, path, process, env, collections::HashMap };
+use crate::parser::Manifest;
 use crate::{ colored_name, colored_version, cmd_exists };
 use crate::{
     parser::{ RemoteRegistryIndex, GitHubItem },
-    confres::REMOTE_REGISTRY_INDEX
 };
 
 
@@ -40,10 +40,10 @@ pub fn log_message(mtype: MessageType, context: Option<&str>, display: bool) -> 
     return m;
 }
 
-pub fn fetch_remote_registry_index() -> Result<HashMap<String, RemoteRegistryIndex>> {
+pub fn fetch_remote_registry_index(registry_url: &str) -> Result<HashMap<String, RemoteRegistryIndex>> {
     let client = reqwest::blocking::Client::new();
     let response = client
-       .get(REMOTE_REGISTRY_INDEX)
+       .get(registry_url)
        .header("User-Agent", "cspm")
        .send()?
        .error_for_status()?;
@@ -52,7 +52,7 @@ pub fn fetch_remote_registry_index() -> Result<HashMap<String, RemoteRegistryInd
     Ok(rjson)
 }
 
-fn download_from_remote_registry(url: &str, destination: &path::Path) -> Result<()> {
+pub fn download_from_remote_registry(url: &str, destination: &path::Path) -> Result<()> {
      let client = reqwest::blocking::Client::new();
      let response: Vec<GitHubItem> = client
         .get(url)
@@ -266,4 +266,29 @@ pub fn run_risset(rst_options: &Vec<String>) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub fn check_module_mode(mtoml: &Manifest) -> bool {
+    match mtoml.package.mode.as_str() {
+        "cs-module" => {
+            if mtoml.main.udo.is_none() {
+                log_message(MessageType::Warning("Declared as cs-module, but entry point .udo not found".to_string()), Some("VALIDATE"), true);
+                return false;
+            }
+        },
+        "cs-project" => {
+            if mtoml.main.csd.is_none() || (mtoml.main.orc.is_none() && mtoml.main.sco.is_none()) {
+                log_message(MessageType::Warning("Declared as cs-project, but entry point .csd or orc/sco not found".to_string()), Some("VALIDATE"), true);
+                return false
+            }
+        }
+        _ => {
+            if mtoml.main.csd.is_none() || (mtoml.main.orc.is_none() && mtoml.main.sco.is_none()) {
+                log_message(MessageType::Warning("Document mode in Cspm.toml file must be 'cs-module' or 'cs-project'".to_string()), Some("VALIDATE"), true);
+                return false
+            }
+        }
+    }
+
+    true
 }

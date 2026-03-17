@@ -2,10 +2,10 @@
 
 **NOTE: THIS PROJECT IS CURRENTLY A WORK IN PROGRESS. A REMOTE REGISTRY IS NOT YET AVAILABLE, BUT IT WILL BE IMPLEMENTED SOON!**      
 
-**cspm** is a modern, fast, and deterministic package manager for the [Csound](https://csound.com/), written in Rust.
+**cspm** is a modern, fast, and deterministic package and project manager for the [Csound](https://csound.com/), written in Rust.
 
 It brings modern dependency management (similar to `cargo` or `npm`) to the Csound ecosystem.  
-With `cspm`, you can easily initialize projects, manage third-party modules (UDOs), share and download modules from the community, and create fully reproducible projects through manifests and lockfiles. 
+With `cspm`, you can easily initialize projects, manage third-party modules (UDOs) or projects (CSD), share and download modules from the community, and create fully reproducible projects through manifests and lockfiles. 
 This ensures that the exact same module versions are used across different systems and environments.
 
 ---
@@ -45,11 +45,11 @@ cspm --version
 Add a community module to your project:
 
 ```bash
-cspm add module
+cspm add [module]
 ```
 
 ```bash
-cspm add module1, module2, ...
+cspm add [module1, module2, ...]
 ```
 
 Run a `.csd` project
@@ -64,12 +64,21 @@ Install plugins via risset
 cspm risset install [plugin]
 ```
 
+Or, you can download a shared `.csd` or `orc/sco` Csound project. And build it from manifest or lock file
+
+```bash
+cspm take [project]
+cd project
+cspm build
+```
+
 ## Cspm.toml file
 
 ```toml
 [package]
 name = "my_synth"
 version = "0.1.0"
+mode: "cs-module"
 description = "An awesome FM synthesizer"
 authors =["<you@example.com>"]
 license = "MIT"
@@ -104,15 +113,16 @@ Commands:
   upgrade                 Upgrade global modules (without manifest)
   reinstall               Reinstall dependencies to the project
   remove                  Remove dependencies from the project
-  update                  Update the project's dependencies
+  update                  Update the project dependencies
   cache                   Manage cspm cache
-  sync                    Check the project's environment status
+  sync                    Check the project environment status
   build                   Build project from manifest or lock file
   publish                 Validate module structure and metadata before creating a Pull Request
   run                     Run Csound project
   validate                Check Cspm.toml file and fixes issues automatically
   risset                  Install plugins using risset
   search                  Display module info
+  take                    Download a shared Csound project
   version, -v, --version  Display cspm version
   help                    Print this message or the help of the given subcommand(s)
 

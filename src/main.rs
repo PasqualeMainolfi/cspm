@@ -30,7 +30,8 @@ use crate::{
         run_project,
         install_plugins,
         validate_project,
-        publish_module
+        publish_module,
+        take_project
     }
 };
 
@@ -208,6 +209,15 @@ fn main() {
                 log_message(MessageType::Error(format!("Failed to search the module:\n{}", e)), None, true);
                 return
             }
+        },
+        // download a shared csound project
+        CsCommands::Take { project } => {
+            log_message(MessageType::Info("Download a shared Csound project".to_string()), None, true);
+            if let Err(e) = take_project(&project) {
+                log_message(MessageType::Error(format!("Failed to take the project:\n{}", e)), None, true);
+                return
+            }
+
         },
         // display cspm version
         CsCommands::Version => {

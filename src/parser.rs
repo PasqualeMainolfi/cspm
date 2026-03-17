@@ -3,6 +3,7 @@ use serde::{ Deserialize, Serialize };
 use sha2::{ Sha256, Digest };
 use walkdir::WalkDir;
 use colored::*;
+use crate::confres::REMOTE_MREGISTRY_INDEX;
 use crate::{ colored_name, colored_version, colored_name_version };
 use crate::utils::{ MessageType, log_message, fetch_remote_registry_index };
 use std::{ collections::{ HashMap, HashSet }, fs, path };
@@ -279,6 +280,7 @@ impl ManageToml for Manifest {
 pub struct MainPackage {
     pub name: String,
     pub version: String,
+    pub mode: String,
     pub description: String,
     pub repository: String,
     pub authors: Vec<String>,
@@ -479,7 +481,7 @@ impl ModuleTools {
             true
         );
 
-        let indexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index()?;
+        let indexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index(REMOTE_MREGISTRY_INDEX)?;
 
         if let Some(index) = indexes.get(pname) {
             let versions = &index.versions;

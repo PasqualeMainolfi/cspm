@@ -11,11 +11,11 @@ use std::{
 };
 
 use crate::{
+    build_dir,
     cmd_exists,
     colored_name,
     colored_name_version,
-    colored_version,
-    build_dir
+    colored_version
 };
 
 use crate::{
@@ -28,7 +28,9 @@ use crate::{
         run_csound_script,
         check_csound_installed,
         check_csound_and_compare_versions,
-        run_risset
+        run_risset,
+        download_from_remote_registry,
+        check_module_mode
     },
     parser::{
         CacheMeta,
@@ -55,7 +57,10 @@ use crate::{
         DEFAULT_SRC_FOLDER,
         MANIFEST_FILE,
         CS_MODULE_META,
-        REMOTE_REGISTRY,
+        REMOTE_MREGISTRY,
+        REMOTE_PREGISTRY,
+        REMOTE_MREGISTRY_INDEX,
+        REMOTE_PREGISTRY_INDEX,
         ProjectRoots,
         ProjectRootMode,
         ProjectPaths,
@@ -81,7 +86,7 @@ pub fn create_project(p_name: String, module_flag: bool, global: bool) -> Result
     log_message(MessageType::Info(format!("Use global modules folder: {}", global)), Some("CREATE"), true);
 
     // main script (entry point)
-    let main_ext = if !module_flag { ".csd" } else { ".udo" };
+    let (main_ext, project_mode) = if !module_flag { (".csd", "cs_project") } else { (".udo", "cs_module") };
     let main_script = format!("{}{}", p_name, main_ext);
 
     // create manifest
@@ -94,6 +99,7 @@ pub fn create_project(p_name: String, module_flag: bool, global: bool) -> Result
     let mft = MainPackage {
         name: p_name,
         version: String::from("0.1.0"),
+        mode: project_mode.to_string(),
         cs_version: cs_version.unwrap_or("".to_string()),
         ..Default::default()
     };
@@ -283,9 +289,9 @@ pub fn resolve_dependencies(
             true
         );
 
-        download_package(&REMOTE_REGISTRY, mname, version, cfolder, &cached_module)?;
+        download_package(REMOTE_MREGISTRY, mname, version, cfolder, &cached_module)?;
         checksum = ModuleTools::compute_checksum(&cached_module)?;
-        let cm = CacheMeta { source: REMOTE_REGISTRY.to_string(), checksum: checksum.clone() };
+        let cm = CacheMeta { source: REMOTE_MREGISTRY.to_string(), checksum: checksum.clone() };
         let meta_json = serde_json::to_string_pretty(&cm)?;
         fs::write(meta_file_path, &meta_json)?;
         cindex.add_entry_to_registry(mname, version);
@@ -357,7 +363,7 @@ pub fn resolve_dependencies(
         lfile.package.push(LockChild {
             name: mname.to_string(),
             version: version.to_string(),
-            source: REMOTE_REGISTRY.to_string(),
+            source: REMOTE_MREGISTRY.to_string(),
             checksum,
             dependencies: mod_manifest.dependencies
                 .iter()
@@ -681,7 +687,7 @@ pub fn sync_project() -> Result<()> {
     let pths = ProjectPaths::new(&roots);
 
     let manifest_toml: Manifest = Manifest::open_toml(&pths.manifest_file)?;
-    let indexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index()?;
+    let indexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index(REMOTE_MREGISTRY_INDEX)?;
 
     log_message(
         MessageType::Info("Check project dependencies status".to_string()),
@@ -1087,6 +1093,11 @@ pub fn run_project(csoptions: &Vec<String>) -> Result<()> {
     let manifest: Manifest = Manifest::open_toml(&pths.manifest_file)?;
     let entry_point: (String, String) = manifest.main.get_entry_point()?;
 
+    if &manifest.package.mode == "cs_module" {
+        let mes_err = log_message(MessageType::Error("Csound documente declared as [cs_module] in Cspm.toml file. Nothing to run".to_string()), Some("RUN"), false);
+        return Err(anyhow::anyhow!(mes_err))
+    }
+
     // check deps
     log_message(
         MessageType::Info("Check dependencies status".to_string()),
@@ -1215,14 +1226,18 @@ pub fn publish_module() -> Result<()> {
     }
 
     let mtoml: Manifest = Manifest::open_toml(&pths.manifest_file)?;
-    let name = mtoml.package.name;
-    let version = mtoml.package.version;
-    let authors = mtoml.package.authors;
-    let include = mtoml.package.include;
-    let src_folder = mtoml.main.src;
+    let name = &mtoml.package.name;
+    let version = &mtoml.package.version;
+    let authors = &mtoml.package.authors;
+    let include = &mtoml.package.include;
+    let src_folder = &mtoml.main.src;
+
 
     let mut warnings = 0;
     let mut errors = 0;
+
+    // check for declared mode
+    if !check_module_mode(&mtoml) { warnings += 1; }
 
     if !pths.lock_file.exists() {
         log_message(MessageType::Warning("Cspm.lock file not found".to_string()), Some("PUBLISH"), true);
@@ -1233,7 +1248,7 @@ pub fn publish_module() -> Result<()> {
     if name.is_empty() || version.is_empty() || authors.is_empty() {
         log_message(
             MessageType::Error(
-                "Name, version and authors of the module must be specified in Cspm.toml file".to_string()
+                "Name, version and authors of the module or project must be specified in Cspm.toml file".to_string()
             ),
             Some("PUBLISH"),
             true
@@ -1250,12 +1265,12 @@ pub fn publish_module() -> Result<()> {
         true
     );
 
-    let remote_index: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index()?;
-    if let Some(entry) = remote_index.get(&name) {
-        if entry.authors != authors {
+    let remote_mindex: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index(REMOTE_MREGISTRY_INDEX)?;
+    if let Some(entry) = remote_mindex.get(name) {
+        if entry.authors != *authors {
             if entry.versions.contains(&version) {
                 log_message(
-                    MessageType::Error("Module with same name but different authors already exists in registry".to_string()),
+                    MessageType::Error("Module with same name but different authors already exists in registry. Please change the name of the module".to_string()),
                     Some("PUBLISH"),
                     true
                 );
@@ -1272,6 +1287,20 @@ pub fn publish_module() -> Result<()> {
             );
 
             warnings += 1;
+        }
+    }
+
+    let remote_pindex: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index(REMOTE_PREGISTRY_INDEX)?;
+    if let Some(entry) = remote_pindex.get(name) {
+        if entry.authors != *authors {
+            if entry.versions.contains(&version) {
+                log_message(
+                    MessageType::Error("Project with same name but different authors already exists in registry. Please change the name of the project".to_string()),
+                    Some("PUBLISH"),
+                    true
+                );
+                errors += 1;
+            }
         }
     }
 
@@ -1369,16 +1398,16 @@ pub fn publish_module() -> Result<()> {
     }
 
     log_message(
-        MessageType::Info("Done. To publish your module to the official cs-modules registry:".to_string()),
+        MessageType::Info("Done. To publish your module or project:".to_string()),
         Some("PUBLISH"),
         true
     );
 
     println!("  1. Go to <https://github.com/PasqualeMainolfi/cs-modules> and click 'Fork'");
-    println!("  2. Upload the module to your forked repository");
-    println!("  3. Add your module and version to the [index.json] file");
+    println!("  2. Upload the module or project to your forked repository");
+    println!("  3. Add your module and version or project to the relative index file [csm-registry.json or csp-registry.json]");
     println!("  4. Open a Pull Request to the official repository.");
-    println!("Once approved, your module will be available to everyone!");
+    println!("Once approved, your module or project will be available to everyone!");
     println!("Read more about on official git hub repository");
 
     Ok(())
@@ -1442,6 +1471,9 @@ pub fn validate_project() -> Result<()> {
             return Err(anyhow::anyhow!(mes_err))
         }
     };
+
+    // check for declared mode
+    check_module_mode(&mtoml);
 
     // check csound and compare versions
     check_csound_and_compare_versions(&mtoml.package.cs_version);
@@ -1523,7 +1555,7 @@ pub fn validate_project() -> Result<()> {
             MessageType::Warning(
                 ".gitignore file not found. Creating...".to_string()
             ),
-            Some("PUBLISH"),
+            Some("VALIDATE"),
             true
         );
 
@@ -1544,7 +1576,7 @@ pub fn validate_project() -> Result<()> {
                 MessageType::Warning(
                     "The cs_modules directory exists in this project. Adding it to .gitignore".to_string()
                 ),
-                Some("PUBLISH"),
+                Some("VALIDATE"),
                 true
             );
 
@@ -1561,7 +1593,7 @@ pub fn validate_project() -> Result<()> {
                 MessageType::Error(
                     "The .config.toml file exists in this project but not in .gitignore. Adding it to .gitignore".to_string()
                 ),
-                Some("PUBLISH"),
+                Some("VALIDATE"),
                 true
             );
 
@@ -1579,6 +1611,27 @@ pub fn validate_project() -> Result<()> {
         Some("VALIDATE"),
         true
     );
+
+    Ok(())
+}
+
+pub fn take_project(project: &str) -> Result<()> {
+    log_message(MessageType::Info("Check remote registry index".to_string()), Some("TAKE"), true);
+    let remote_registry = fetch_remote_registry_index(REMOTE_PREGISTRY_INDEX)?;
+    if !remote_registry.contains_key(project) {
+        let mes_err = log_message(
+            MessageType::Error(format!("Project {} does not exists in remote registry", colored_name!(project))),
+            Some("TAKE"),
+            true
+        );
+        return Err(anyhow::anyhow!(mes_err))
+    }
+
+    log_message(MessageType::Info(format!("Download {} project", colored_name!(project))), Some("TAKE"), true);
+    let project_url = format!("{}/{}", REMOTE_PREGISTRY, project);
+
+    download_from_remote_registry(&project_url, path::Path::new(project))?;
+    log_message(MessageType::Info("Project is now available. Build and join!".to_string()), Some("TAKE"), true);
 
     Ok(())
 }

@@ -149,7 +149,14 @@ pub enum CsCommands {
         module: String
     },
 
+    /// Download a shared Csound project
+    Take {
+        /// Specify the module you wanto info about
+        project: String
+    },
+
     /// Display cspm version
     #[command(short_flag = 'v', long_flag = "version")]
     Version
+
 }

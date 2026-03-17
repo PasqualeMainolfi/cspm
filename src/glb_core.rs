@@ -3,25 +3,33 @@ use serde_json::Value;
 use colored::*;
 use std::{ collections::{ HashSet, HashMap }, fs };
 use crate::{
-    confres::{ ProjectPaths, ProjectRoots, MANIFEST_FILE, CSPM_MANIFEST },
-    prj_core::{ remove_helper, resolve_dependencies },
-    utils::{ MessageType, fetch_remote_registry_index, log_message },
-    parser::{
-        RegistryMode,
-        RemoteRegistryIndex,
-        Manifest,
-        ManageToml,
-        Version,
-        Registry,
-        ModuleTools,VersionStatus
-    },
-};
-
-use crate::{
     colored_name,
     colored_name_version,
     colored_version,
     build_dir
+};
+
+use crate::{
+    prj_core::{ remove_helper, resolve_dependencies },
+    utils::{ MessageType, fetch_remote_registry_index, log_message },
+    confres::{
+        ProjectPaths,
+        ProjectRoots,
+        CSPM_MANIFEST,
+        MANIFEST_FILE,
+        REMOTE_MREGISTRY_INDEX,
+        REMOTE_PREGISTRY_INDEX
+    },
+    parser::{
+        ManageToml,
+        Manifest,
+        ModuleTools,
+        Registry,
+        RegistryMode,
+        RemoteRegistryIndex,
+        Version,
+        VersionStatus
+    }
 };
 
 
@@ -33,21 +41,35 @@ pub fn get_cspm_version() -> Result<String> {
 pub fn search_package(module_name: &str) -> Result<()> {
     log_message(MessageType::Info(format!("Search module: {}", colored_name!(module_name))), Some("SEARCH"), true);
 
-    let indexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index()?;
+    let mindexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index(REMOTE_MREGISTRY_INDEX)?;
+    let pindexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index(REMOTE_PREGISTRY_INDEX)?;
 
-    println!("RESULTS:");
-    match indexes.get(module_name) {
+    match mindexes.get(module_name) {
         Some(pkg) => {
-            println!("");
-            println!("***********************");
-            println!("Module name: {}", module_name);
-            println!("Available versions: {:?}", pkg.versions);
-            println!("Description: {}", pkg.description);
-            println!("***********************");
+            println!();
+            println!("📦 {}", colored_name!(module_name));
+            println!("  ├─ Versions: {}", pkg.versions.join(", "));
+            println!("  └─ Description: {}", pkg.description);
         },
         None => {
             log_message(
-                MessageType::Warning(format!("Module {} not found in remote registry", colored_name!(module_name))),
+                MessageType::Warning(format!("No module named {} was found", colored_name!(module_name))),
+                Some("SEARCH"),
+                true
+            );
+        }
+    }
+
+    match pindexes.get(module_name) {
+        Some(pkg) => {
+            println!();
+            println!("📁 {}", colored_name!(module_name));
+            println!("  ├─ Versions: {}", pkg.versions.join(", "));
+            println!("  └─ Description: {}", pkg.description);
+        },
+        None => {
+            log_message(
+                MessageType::Warning(format!("No project named {} was found", colored_name!(module_name))),
                 Some("SEARCH"),
                 true
             );
@@ -101,10 +123,9 @@ pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
                 let pdeps = entry_manifest.dependencies;
                 let deps_format: String = pdeps.iter().map(|(d, v)| colored_name_version!(d, v)).collect::<Vec<String>>().join(", ");
 
-                println!("***********************");
-                println!("> Module: {}", colored_name_version!(pname, pversion));
-                println!("> Module dependencies: [{}]", deps_format);
-                println!("***********************");
+                println!();
+                println!("🗂️  {}", colored_name_version!(pname, pversion));
+                println!("  ├─ Dependencies: {}", deps_format);
             }
         }
         println!("");
