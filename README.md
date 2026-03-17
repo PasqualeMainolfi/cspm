@@ -78,7 +78,7 @@ cspm build
 [package]
 name = "my_synth"
 version = "0.1.0"
-mode: "cs-module"
+mode = "cs-module"
 description = "An awesome FM synthesizer"
 authors =["<you@example.com>"]
 license = "MIT"
