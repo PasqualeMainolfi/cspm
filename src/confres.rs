@@ -3,7 +3,7 @@ use anyhow::Result;
 use std::{ fs, path };
 use crate::{
     parser::{ ProjectInfo, ManageToml },
-    utils::{ MessageType, log_message }
+    utils::{ LogMessageType, log_message }
 };
 
 
@@ -43,12 +43,12 @@ pub enum ProjectRootMode {
 pub fn get_root(global: bool, mode: &ProjectRootMode, display: bool) -> Result<path::PathBuf> {
     match global {
         true => {
-            let mes_err = log_message(MessageType::Error("Cannot determine home directory".to_string()), None, false);
+            let mes_err = log_message(LogMessageType::Error("Cannot determine home directory".to_string()), None, false);
             let pdir = ProjectDirs::from("org", "csound", "cspm").expect(mes_err.as_str());
             let config_dir = pdir.config_dir();
             if !config_dir.exists() {
                 log_message(
-                    MessageType::Info(
+                    LogMessageType::Info(
                         format!("Create global cache root {}", pdir.data_dir().to_string_lossy())
                     ), None, true
                 );
@@ -58,7 +58,7 @@ pub fn get_root(global: bool, mode: &ProjectRootMode, display: bool) -> Result<p
 
             if display {
                 log_message(
-                    MessageType::Info(
+                    LogMessageType::Info(
                         format!("Global cache root {}", pdir.data_dir().to_string_lossy())
                     ), None, true
                 );
@@ -71,7 +71,7 @@ pub fn get_root(global: bool, mode: &ProjectRootMode, display: bool) -> Result<p
 
             if display {
                 log_message(
-                    MessageType::Info(
+                    LogMessageType::Info(
                         format!("Local env {} (root for {:?})", pdir.to_string_lossy(), mode)
                     ), None, true
                 );

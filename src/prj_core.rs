@@ -7,7 +7,7 @@ use std::{
     process,
     io::Write,
     { fs, fs::OpenOptions },
-    collections::{ HashMap,HashSet,VecDeque },
+    collections::{ HashSet, VecDeque },
 };
 
 use crate::{
@@ -21,15 +21,12 @@ use crate::{
 
 use crate::{
     utils::{
-        MessageType,
+        LogMessageType,
         check_risset,
-        download_package,
-        fetch_remote_registry_index,
         log_message,
         run_csound_script,
         check_csound_installed,
         run_risset,
-        download_from_remote_registry,
         check_gitignore
     },
     parser::{
@@ -43,11 +40,11 @@ use crate::{
         RegistryData,
         RegistryMode,
         VersionStatus,
-        RemoteRegistryIndex,
         Version,
-        Registry,
+        LocalRegistry,
         ProjectInfo,
         ModuleTools,
+        RemoteRegistry
     },
     confres::{
         CSD_MAIN_TEMPLATE,
@@ -83,14 +80,14 @@ pub fn create_project(p_name: String, module_flag: bool, global: bool) -> Result
 
     // create project info file
     create_info_file(&p, global)?;
-    log_message(MessageType::Info(format!("Use global modules folder: {}", global)), Some("CREATE"), true);
+    log_message(LogMessageType::Info(format!("Use global modules folder: {}", global)), Some("CREATE"), true);
 
     // main script (entry point)
     let (main_ext, project_mode) = if !module_flag { (".csd", "cs-project") } else { (".udo", "cs-module") };
     let main_script = format!("{}{}", p_name, main_ext);
 
     // create manifest
-    log_message(MessageType::Info("Create Cspm.toml file".to_string()), Some("CREATE"), true);
+    log_message(LogMessageType::Info("Create Cspm.toml file".to_string()), Some("CREATE"), true);
 
     // check if csound is installed
     let cs_version: Option<String> = check_csound_installed();
@@ -124,12 +121,12 @@ pub fn create_project(p_name: String, module_flag: bool, global: bool) -> Result
     Manifest::write_toml(&manifest_file, &manifest_init)?;
 
     // create main .csd or .udo file
-    log_message(MessageType::Info("Create src folder and entry point file".to_string()), Some("CREATE"), true);
+    log_message(LogMessageType::Info("Create src folder and entry point file".to_string()), Some("CREATE"), true);
     let src_file = p_src.join(main_script);
     fs::write(src_file, &main_template)?;
 
     // create .gitignore
-    log_message(MessageType::Info("Create .gitignore file".to_string()), Some("CREATE"), true);
+    log_message(LogMessageType::Info("Create .gitignore file".to_string()), Some("CREATE"), true);
     create_gitignore_file(&p)?;
 
     Ok(())
@@ -145,14 +142,14 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
     build_dir!(&pths.modules_folder);
 
     let mversion = ModuleTools::resolve_module_version(&name, version)?;
-    let manifest_toml = Manifest::open_toml(&pths.manifest_file)?;
+    let mut manifest_toml = Manifest::open_toml(&pths.manifest_file)?;
 
     if let Some(internal_version) = manifest_toml.dependencies.get(name) {
         let parsed_internal_version = Version::parse(&internal_version)?;
         match parsed_internal_version.compare(&Version::parse(&mversion)?) {
             VersionStatus::Old | VersionStatus::Young => {
                 log_message(
-                    MessageType::Info(format!("Remove module {} previously added", colored_name_version!(name, mversion))),
+                    LogMessageType::Info(format!("Remove module {} previously added", colored_name_version!(name, mversion))),
                     Some("ADD"),
                     true
                 );
@@ -161,7 +158,7 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
             },
             VersionStatus::Same => {
                 log_message(
-                    MessageType::Info(format!("Module {} already installed", colored_name_version!(name, mversion))),
+                    LogMessageType::Info(format!("Module {} already installed", colored_name_version!(name, mversion))),
                     Some("ADD"),
                     true
                 );
@@ -179,16 +176,18 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
     };
 
     log_message(
-        MessageType::Info("Check and resolve dependencies...".to_string()),
+        LogMessageType::Info("Check and resolve dependencies...".to_string()),
         Some("ADD"),
         true
     );
 
-    let mut mindex = Registry::new(&pths.modules_registry, RegistryMode::ModulesMode);
-    let mut cindex = Registry::new(&pths.cache_registry, RegistryMode::CacheMode);
+    let mut mindex = LocalRegistry::new(&pths.modules_registry, RegistryMode::ModulesMode);
+    let mut cindex = LocalRegistry::new(&pths.cache_registry, RegistryMode::CacheMode);
 
     mindex.read_internal_registry()?;
     cindex.read_internal_registry()?;
+
+    let remote_registry = RemoteRegistry::new(REMOTE_MREGISTRY_INDEX, REMOTE_MREGISTRY);
 
     let mut visited = HashSet::new();
     resolve_dependencies(
@@ -199,40 +198,32 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
         &mut visited,
         &mut mindex,
         &mut cindex,
+        &remote_registry,
         Some(&mut lockfile)
     )?;
 
-    log_message(
-        MessageType::Info("Write registry index".to_string()),
-        Some("ADD"),
-        true
-    );
+    log_message(LogMessageType::Info("Write registry index".to_string()),Some("ADD"),true);
 
     mindex.write_internal_registry()?;
     cindex.write_internal_registry()?;
 
+    log_message(LogMessageType::Info("Update Cspm.toml file".to_string()),Some("ADD"),true);
+
+    // update manifest (atomic)
+    manifest_toml.update_from_file()?;
+    manifest_toml.add_dependency(&name, &mversion);
+
     log_message(
-        MessageType::Info("Update Cspm.toml file".to_string()),
+        LogMessageType::Info("Update Cspm.lock file".to_string()),
         Some("ADD"),
         true
     );
 
-    update_manifest(&name, &mversion)?;
-
-    // update manifest in memory
-    let re_manifest_toml = Manifest::open_toml(&pths.manifest_file)?; // re-open after changes
-
-    log_message(
-        MessageType::Info("Update Cspm.lock file".to_string()),
-        Some("ADD"),
-        true
-    );
-
-    lockfile.package.retain(|p| p.name != re_manifest_toml.package.name);
+    lockfile.package.retain(|p| p.name != manifest_toml.package.name);
     lockfile.package.push(LockChild {
-        name: re_manifest_toml.package.name,
-        version: re_manifest_toml.package.version,
-        dependencies: re_manifest_toml.dependencies
+        name: manifest_toml.package.name.clone(),
+        version: manifest_toml.package.version.clone(),
+        dependencies: manifest_toml.dependencies
             .iter()
             .map(|(d, v)| pkg_full_name!(d, v))
             .collect(),
@@ -240,23 +231,11 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
     });
 
     LockFile::write_toml(&pths.lock_file, &lockfile)?;
+    Manifest::write_toml(&pths.manifest_file, &manifest_toml)?;
 
     Ok(())
 }
 
-fn update_manifest(pname: &str, version: &str) -> Result<()> {
-    let mpath = get_root(false, &ProjectRootMode::ModulesRoot, false)?.join(MANIFEST_FILE);
-    let mut manifest = Manifest::open_toml(&mpath)?;
-
-    manifest.dependencies
-        .entry(pname.to_string())
-        .and_modify(|v| *v = version.to_string())
-        .or_insert(version.to_string());
-
-    Manifest::write_toml(&mpath, &manifest)?;
-
-    Ok(())
-}
 
 pub fn resolve_dependencies(
     cfolder: &path::Path,
@@ -264,8 +243,9 @@ pub fn resolve_dependencies(
     mname: &str,
     version: &str,
     visited: &mut HashSet<String>,
-    mindex: &mut Registry,
-    cindex: &mut Registry,
+    mindex: &mut LocalRegistry,
+    cindex: &mut LocalRegistry,
+    remote_registry: &RemoteRegistry,
     mut lockfile: Option<&mut LockFile>
 ) -> Result<()>
 {
@@ -283,12 +263,16 @@ pub fn resolve_dependencies(
     if !cached_module.exists() {
 
         log_message(
-            MessageType::Info(format!("Module {} not found in cache, downloading...", colored_name_version!(mname, version))),
+            LogMessageType::Info(
+                format!("Module {} not found in cache, downloading...",
+                    colored_name_version!(mname, version)
+                )
+            ),
             Some("RESOLVE-DEPS"),
             true
         );
 
-        download_package(REMOTE_MREGISTRY, mname, version, cfolder, &cached_module)?;
+        remote_registry.download_package(mname, version, cfolder, &cached_module)?;
         checksum = ModuleTools::compute_checksum(&cached_module)?;
         let cm = CacheMeta { source: REMOTE_MREGISTRY.to_string(), checksum: checksum.clone() };
         let meta_json = serde_json::to_string_pretty(&cm)?;
@@ -300,37 +284,8 @@ pub fn resolve_dependencies(
         checksum = meta_json.checksum;
     }
 
-    if let Some(ref reg) = mindex.registry {
-        match reg {
-            RegistryData::ModulesRegistry(map) => {
-                if let Some(v) = map.get(mname) {
-                    if v != &version {
-
-                        let err_mes = log_message(
-                            MessageType::Error(
-                                format!(
-                                    "Dependency conflict: {} requested but {} is already installed",
-                                    colored_name_version!(mname, version),
-                                    colored_name_version!(mname, v)
-                                )
-                            ),
-                            Some("RESOLVE-DEPS"),
-                            false
-                        );
-
-                        return Err(anyhow::anyhow!(err_mes))
-                    }
-                }
-            },
-            RegistryData::CacheRegistry(_) => { }
-        }
-    } else {
-        let err_mes = log_message(
-            MessageType::Error("Failed to read registry index".to_string()), Some("RESOLVE-DEPS"), false
-        );
-
-        return Err(anyhow::anyhow!(err_mes))
-    }
+    // check internal version conflicts
+    mindex.check_version_conflicts(mname, version)?;
 
     if !local_module.exists() {
         let mut coptions = CopyOptions::new();
@@ -338,7 +293,7 @@ pub fn resolve_dependencies(
         copy(&cached_module, &local_module, &coptions)?;
 
         log_message(
-            MessageType::Info("Update registry index".to_string()),
+            LogMessageType::Info("Update registry index".to_string()),
             Some("RESOLVE-DEPS"),
             true
         );
@@ -352,7 +307,7 @@ pub fn resolve_dependencies(
     if let Some(lfile) = lockfile.as_mut() {
         // remove old dependencies and add child to lockfile
         log_message(
-            MessageType::Info("Add child to Cspm.lock file and remove old dependencies".to_string()),
+            LogMessageType::Info("Add child to Cspm.lock file and remove old dependencies".to_string()),
             Some("RESOLVE-DEPS"),
             true
         );
@@ -362,7 +317,7 @@ pub fn resolve_dependencies(
         lfile.package.push(LockChild {
             name: mname.to_string(),
             version: version.to_string(),
-            source: REMOTE_MREGISTRY.to_string(),
+            source: remote_registry.resources_url.clone(),
             checksum,
             dependencies: mod_manifest.dependencies
                 .iter()
@@ -372,7 +327,7 @@ pub fn resolve_dependencies(
     }
 
     log_message(
-        MessageType::Info("Resolving dependencies...".to_string()),
+        LogMessageType::Info("Resolving dependencies...".to_string()),
         Some("RESOLVE-DEPS"),
         true
     );
@@ -386,6 +341,7 @@ pub fn resolve_dependencies(
             visited,
             mindex,
             cindex,
+            remote_registry,
             lockfile.as_deref_mut()
         )?;
     }
@@ -410,7 +366,7 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
     };
 
     log_message(
-        MessageType::Info(format!("Remove module {} from cs_modules folder", colored_name!(pname))),
+        LogMessageType::Info(format!("Remove module {} from cs_modules folder", colored_name!(pname))),
         Some("REMOVE"),
         true
     );
@@ -419,7 +375,7 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
         Some(_) => { },
         None => {
             log_message(
-                MessageType::Warning(format!("Undeclared module {} in Cspm.toml file. Check if exists in cs_modules folder", colored_name!(pname))),
+                LogMessageType::Warning(format!("Undeclared module {} in Cspm.toml file. Check if exists in cs_modules folder", colored_name!(pname))),
                 Some("REMOVE"),
                 true
             );
@@ -428,7 +384,7 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
 
     // delete from modules (also dependencies)
     log_message(
-        MessageType::Info(format!("Remove module {} dependencies", colored_name!(pname))),
+        LogMessageType::Info(format!("Remove module {} dependencies", colored_name!(pname))),
         Some("REMOVE"),
         true
     );
@@ -438,7 +394,7 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
     if !check_version.is_empty() {
         if &check_version != &manifest_toml.package.version {
             let mes_err = log_message(
-                MessageType::Error(
+                LogMessageType::Error(
                     format!(
                         "The provided version {} does not match the declared version {} in Cspm.toml",
                         colored_name!(check_version),
@@ -454,14 +410,14 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
     }
 
     let pname_full = pkg_full_name!(pname, manifest_toml.package.version);
-    let mut mindex = Registry::new(&pths.modules_registry, RegistryMode::ModulesMode);
+    let mut mindex = LocalRegistry::new(&pths.modules_registry, RegistryMode::ModulesMode);
     mindex.read_internal_registry()?;
 
     remove_helper(&pths.modules_folder, &pname_full, force, &mut mindex, Some(&mut lockfile))?;
 
     // update registry index
     log_message(
-        MessageType::Info("Write registry index".to_string()),
+        LogMessageType::Info("Write registry index".to_string()),
         Some("REMOVE"),
         true
     );
@@ -470,7 +426,7 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
 
     // delete from manifest
     log_message(
-        MessageType::Info(format!("Remove module {} from Cspm.toml file", colored_name!(pname))),
+        LogMessageType::Info(format!("Remove module {} from Cspm.toml file", colored_name!(pname))),
         Some("REMOVE"),
         true
     );
@@ -479,7 +435,7 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
 
     // update lockfile
     log_message(
-        MessageType::Info("Update Cspm.toml and Cspm.lock file".to_string()),
+        LogMessageType::Info("Update Cspm.toml and Cspm.lock file".to_string()),
         Some("REMOVE"),
         true
     );
@@ -504,7 +460,7 @@ pub fn remove_helper(
     cs_modules_path: &path::Path,
     pname: &str,
     force: bool,
-    mindex: &mut Registry,
+    mindex: &mut LocalRegistry,
     mut lockfile: Option<&mut LockFile>
 ) -> Result<()>
 {
@@ -525,16 +481,13 @@ pub fn remove_helper(
             if !manifest_path.exists() { continue; };
 
             let mtoml = Manifest::open_toml(&manifest_path)?;
-            let dset: HashSet<String> = mtoml.dependencies
-                .keys()
-                .map(|d| d.to_string())
-                .collect();
+            let dset: HashSet<String> = mtoml.dependencies.keys().map(|d| d.to_string()).collect();
 
             if !force {
                 if dset.contains(&current) {
 
                     log_message(
-                        MessageType::Warning(
+                        LogMessageType::Warning(
                             format!(
                                 "Module {} removal skipped because the module {} depends on it. Use [--force or -f] if you still want to delete",
                                 colored_name!(current),
@@ -564,14 +517,14 @@ pub fn remove_helper(
 
             if pfolder.exists() {
 
-                log_message(MessageType::Info(format!("Remove module {}", colored_name!(current))),
+                log_message(LogMessageType::Info(format!("Remove module {}", colored_name!(current))),
                     Some("REMOVE"),
                     true
                 );
 
                 fs::remove_dir_all(&pfolder)?;
 
-                log_message(MessageType::Info("Update project registry index".to_string()),
+                log_message(LogMessageType::Info("Update project registry index".to_string()),
                     Some("REMOVE"),
                     true
                 );
@@ -592,7 +545,7 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
     let mut roots = ProjectRoots::new(false)?;
     roots.set_modules_root(None)?;
     let pths = ProjectPaths::new(&roots);
-    let mut registry = Registry::new(&pths.modules_registry, RegistryMode::ModulesMode);
+    let mut registry = LocalRegistry::new(&pths.modules_registry, RegistryMode::ModulesMode);
     registry.read_internal_registry()?;
 
     let manifest = Manifest::open_toml(&pths.manifest_file)?;
@@ -603,7 +556,7 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
             if !installed_modules.contains_key(module) {
 
                 let err_mes = log_message(
-                    MessageType::Error(
+                    LogMessageType::Error(
                         format!("Undeclared module {} in Cspm.toml file", colored_name!(module))
                     ),
                     Some("UPDATE-MOD"),
@@ -624,7 +577,7 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
                 match parsed_registry_version.compare(&Version::parse(&latest_version)?) {
                     VersionStatus::Young => {
                         log_message(
-                            MessageType::Info(format!("Module {} is up to date", colored_name!(module))),
+                            LogMessageType::Info(format!("Module {} is up to date", colored_name!(module))),
                             Some("UPDATE"),
                             true
                         );
@@ -632,7 +585,7 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
                     VersionStatus::Old => { to_update.insert(colored_name_version!(module, latest_version)); },
                     VersionStatus::Same => {
                         log_message(
-                            MessageType::Info(format!("Module {} already exists", colored_name!(module))),
+                            LogMessageType::Info(format!("Module {} already exists", colored_name!(module))),
                             Some("UPDATE"),
                             true
                         );
@@ -640,7 +593,7 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
                 }
             } else {
                 log_message(
-                    MessageType::Warning(format!("Module {} does not exists in registry", colored_name!(module))),
+                    LogMessageType::Warning(format!("Module {} does not exists in registry", colored_name!(module))),
                     Some("UPDATE"),
                     true
                 );
@@ -654,23 +607,25 @@ pub fn update_package(modules: Option<Vec<String>>, force: bool) -> Result<()> {
         let (pname, pversion) = ModuleTools::parse_module_name(entry);
 
         log_message(
-            MessageType::Info(format!("Remove module {}", colored_name_version!(pname, pversion))),
+            LogMessageType::Info(format!("Remove module {}", colored_name_version!(pname, pversion))),
             Some("UPDATE"),
             true
         );
 
+        // this process must be optimized: read contents of package and remove only if changed
         remove_package(&pname, force)?;
 
         log_message(
-            MessageType::Info(format!("Update module {}", colored_name_version!(pname, pversion))),
+            LogMessageType::Info(format!("Update module {}", colored_name_version!(pname, pversion))),
             Some("UPDATE"),
             true
         );
 
+        // this process must be optimized: add only removed contents (if changed)
         add_package(&pname, Some(pversion), force)?;
 
         log_message(
-            MessageType::Info(format!("Module {} is up to date", colored_name!(pname))),
+            LogMessageType::Info(format!("Module {} is up to date", colored_name!(pname))),
             Some("UPDATE"),
             true
         );
@@ -686,10 +641,10 @@ pub fn sync_project() -> Result<()> {
     let pths = ProjectPaths::new(&roots);
 
     let manifest_toml: Manifest = Manifest::open_toml(&pths.manifest_file)?;
-    let indexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index(REMOTE_MREGISTRY_INDEX)?;
+    let remote_registry = RemoteRegistry::new(REMOTE_MREGISTRY_INDEX, REMOTE_MREGISTRY);
 
     log_message(
-        MessageType::Info("Check project dependencies status".to_string()),
+        LogMessageType::Info("Check project dependencies status".to_string()),
         Some("SYNC"),
         true
     );
@@ -697,7 +652,7 @@ pub fn sync_project() -> Result<()> {
     if manifest_toml.dependencies.is_empty() {
 
         log_message(
-            MessageType::Info("Nothing to check: empty dependencies section".to_string()),
+            LogMessageType::Info("Nothing to check: empty dependencies section".to_string()),
             Some("SYNC"),
             true
         );
@@ -705,21 +660,21 @@ pub fn sync_project() -> Result<()> {
         return Ok(())
     }
 
-    let mut mregistry = Registry::new(&pths.modules_registry, RegistryMode::ModulesMode);
+    let mut mregistry = LocalRegistry::new(&pths.modules_registry, RegistryMode::ModulesMode);
     mregistry.read_internal_registry()?;
 
     for (d, v) in manifest_toml.dependencies.iter() {
-        if let Some(pkg) = indexes.get(d) {
+        if let Ok(pkg) = remote_registry.fetch_and_get(d) {
             if let Some(latest) = pkg.versions.last() {
                 if v == latest {
                     log_message(
-                        MessageType::Info(format!("Module {} is up to date", colored_name!(d))),
+                        LogMessageType::Info(format!("Module {} is up to date", colored_name!(d))),
                         Some("SYNC"),
                         true
                     );
                 } else {
                     log_message(
-                        MessageType::Info(
+                        LogMessageType::Info(
                             format!(
                                 "Module {} is outdated. Latest available version: {}",
                                 colored_name!(d),
@@ -732,14 +687,14 @@ pub fn sync_project() -> Result<()> {
                 }
             } else {
                 log_message(
-                    MessageType::Error(format!("Module {}: no available versions are declared in remote registry", colored_name!(d))),
+                    LogMessageType::Error(format!("Module {}: no available versions are declared in remote registry", colored_name!(d))),
                     Some("SYNC"),
                     true
                 );
             }
         } else {
             log_message(
-                MessageType::Warning(format!("Module {} not found in remote registry", colored_name!(d))),
+                LogMessageType::Warning(format!("Module {} not found in remote registry", colored_name!(d))),
                 Some("SYNC"),
                 true
             );
@@ -753,13 +708,13 @@ pub fn sync_project() -> Result<()> {
                 RegistryData::CacheRegistry(_) => false
             }
         } else {
-            let mes_err = log_message(MessageType::Error("Failed to read registry".to_string()), Some("SYNC"), false);
+            let mes_err = log_message(LogMessageType::Error("Failed to read registry".to_string()), Some("SYNC"), false);
             return Err(anyhow::anyhow!(mes_err))
         };
 
         if !is_in {
             log_message(
-                MessageType::Warning(format!("Module {} declared in manifest but not available in project environment", colored_name!(d))),
+                LogMessageType::Warning(format!("Module {} declared in manifest but not available in project environment", colored_name!(d))),
                 Some("SYNC"),
                 true
             );
@@ -776,7 +731,7 @@ pub fn build_from_manifest(global: bool) -> Result<()> {
     let pths = ProjectPaths::new(&roots);
 
     // create .gitignore
-    log_message(MessageType::Info("Create .gitignore file".to_string()), Some("BUILD"), true);
+    log_message(LogMessageType::Info("Create .gitignore file".to_string()), Some("BUILD"), true);
     create_gitignore_file(&roots.project_root)?;
 
     build_dir!(&pths.cache_folder);
@@ -794,24 +749,27 @@ pub fn build_from_manifest(global: bool) -> Result<()> {
         LockFile::open_toml(&pths.lock_file)?
     };
 
-    let mut mindex = Registry::new(&pths.modules_registry, RegistryMode::ModulesMode);
-    let mut cindex = Registry::new(&pths.cache_registry, RegistryMode::CacheMode);
+    let mut mindex = LocalRegistry::new(&pths.modules_registry, RegistryMode::ModulesMode);
+    let mut cindex = LocalRegistry::new(&pths.cache_registry, RegistryMode::CacheMode);
     mindex.read_internal_registry()?;
     cindex.read_internal_registry()?;
+
 
     let mut visited = HashSet::new();
 
     log_message(
-        MessageType::Info("Build dependencies from manifest".to_string()),
+        LogMessageType::Info("Build dependencies from manifest".to_string()),
         Some("BUILD"),
         true
     );
+
+    let remote_registry = RemoteRegistry::new(REMOTE_MREGISTRY_INDEX, REMOTE_MREGISTRY);
 
     for (name, version) in manifest.dependencies.iter() {
         let mversion = ModuleTools::resolve_module_version(name, Some(version.clone()))?;
 
         log_message(
-            MessageType::Info("Check and resolve dependencies...".to_string()),
+            LogMessageType::Info("Check and resolve dependencies...".to_string()),
             Some("BUILD"),
             true
         );
@@ -824,12 +782,13 @@ pub fn build_from_manifest(global: bool) -> Result<()> {
             &mut visited,
             &mut mindex,
             &mut cindex,
+            &remote_registry,
             Some(&mut lockfile)
         )?;
     }
 
     log_message(
-        MessageType::Info("Write registry index".to_string()),
+        LogMessageType::Info("Write registry index".to_string()),
         Some("BUILD"),
         true
     );
@@ -839,21 +798,21 @@ pub fn build_from_manifest(global: bool) -> Result<()> {
 
     // build plugins from manifest
     log_message(
-        MessageType::Info("Check for declared plugins".to_string()),
+        LogMessageType::Info("Check for declared plugins".to_string()),
         Some("BUILD"),
         true
     );
 
     if manifest.plugins.is_empty() {
         log_message(
-            MessageType::Info("No plugins declared in Cspm.toml file".to_string()),
+            LogMessageType::Info("No plugins declared in Cspm.toml file".to_string()),
             Some("BUILD"),
             true
         );
 
     } else {
         log_message(
-            MessageType::Info("Install plugins declared in Cspm.toml file".to_string()),
+            LogMessageType::Info("Install plugins declared in Cspm.toml file".to_string()),
             Some("BUILD"),
             true
         );
@@ -864,7 +823,7 @@ pub fn build_from_manifest(global: bool) -> Result<()> {
     }
 
     log_message(
-        MessageType::Info("Update Cspm.lock file".to_string()),
+        LogMessageType::Info("Update Cspm.lock file".to_string()),
         Some("BUILD"),
         true
     );
@@ -882,7 +841,7 @@ pub fn build_from_manifest(global: bool) -> Result<()> {
     });
 
     log_message(
-        MessageType::Info("Write Cspm.lock file".to_string()),
+        LogMessageType::Info("Write Cspm.lock file".to_string()),
         Some("BUILD"),
         true
     );
@@ -899,18 +858,18 @@ pub fn build_from_lock(global: bool) -> Result<()> {
     let pths = ProjectPaths::new(&roots);
 
     // create .gitignore
-    log_message(MessageType::Info("Create .gitignore file".to_string()), Some("BUILD"), true);
+    log_message(LogMessageType::Info("Create .gitignore file".to_string()), Some("BUILD"), true);
     create_gitignore_file(&roots.project_root)?;
 
     log_message(
-        MessageType::Info("Build project from Cspm.lock file".to_string()),
+        LogMessageType::Info("Build project from Cspm.lock file".to_string()),
         Some("BUILD"),
         true
     );
 
     if !pths.lock_file.exists() {
         let mes_err = log_message(
-            MessageType::Error("Cspm.lock file not found".to_string()),
+            LogMessageType::Error("Cspm.lock file not found".to_string()),
             Some("BUILD"),
             false
         );
@@ -927,14 +886,16 @@ pub fn build_from_lock(global: bool) -> Result<()> {
     build_dir!(&pths.cache_folder);
     build_dir!(&pths.modules_folder);
 
-    let mut mindex = Registry::new(&pths.modules_registry, RegistryMode::ModulesMode);
+    let mut mindex = LocalRegistry::new(&pths.modules_registry, RegistryMode::ModulesMode);
     mindex.read_internal_registry()?;
 
     log_message(
-        MessageType::Info("Restoring environment exactly from Cspm.lock...".to_string()),
+        LogMessageType::Info("Restoring environment exactly from Cspm.lock...".to_string()),
         Some("BUILD"),
         true
     );
+
+    let remote_mregistry = RemoteRegistry::new(REMOTE_MREGISTRY_INDEX, REMOTE_MREGISTRY);
 
     for pkg in lockfile.package.iter() {
         if pkg.name == manifest.package.name { continue; }
@@ -946,20 +907,20 @@ pub fn build_from_lock(global: bool) -> Result<()> {
 
         if !cached_module.exists() {
             log_message(
-                MessageType::Info(
+                LogMessageType::Info(
                     format!("Downloading exact version {}...", colored_name_version!(pkg.name, pkg.version))
                 ),
                 Some("BUILD"),
                 true
             );
 
-            download_package(&pkg.source, &pkg.name, &pkg.version, &pths.cache_folder, &cached_module)?;
+            remote_mregistry.download_package(&pkg.name, &pkg.version, &pths.cache_folder, &cached_module)?;
 
             let downloaded_checksum = ModuleTools::compute_checksum(&cached_module)?;
             if downloaded_checksum != pkg.checksum {
                 fs::remove_dir_all(&cached_module)?;
                 let mes_err = log_message(
-                    MessageType::Error(
+                    LogMessageType::Error(
                         format!(
                             "Checksum mismatch for {}!\n> Expected: {}\n> Got: {}",
                             colored_name_version!(pkg.name, pkg.version),
@@ -983,7 +944,7 @@ pub fn build_from_lock(global: bool) -> Result<()> {
 
         if !local_module.exists() {
             log_message(
-                MessageType::Info(
+                LogMessageType::Info(
                     format!("Extracting {} to cs_modules...", colored_name_version!(pkg.name, pkg.version))
                 ),
                 Some("BUILD"),
@@ -995,7 +956,7 @@ pub fn build_from_lock(global: bool) -> Result<()> {
             copy(&cached_module, &local_module, &coptions)?;
 
             log_message(
-                MessageType::Info("Update internal registry".to_string()),
+                LogMessageType::Info("Update internal registry".to_string()),
                 Some("BUILD"),
                 true
             );
@@ -1005,7 +966,7 @@ pub fn build_from_lock(global: bool) -> Result<()> {
     }
 
     log_message(
-        MessageType::Info("Write registry index".to_string()),
+        LogMessageType::Info("Write registry index".to_string()),
         Some("BUILD"),
         true
     );
@@ -1014,21 +975,21 @@ pub fn build_from_lock(global: bool) -> Result<()> {
 
     // rebuild plugins
     log_message(
-        MessageType::Info("Check for installed plugins".to_string()),
+        LogMessageType::Info("Check for installed plugins".to_string()),
         Some("BUILD"),
         true
     );
 
     if lockfile.plugins.is_empty() {
         log_message(
-            MessageType::Info("No plugins declared in Cspm.lock file".to_string()),
+            LogMessageType::Info("No plugins declared in Cspm.lock file".to_string()),
             Some("BUILD"),
             true
         );
 
     } else {
         log_message(
-            MessageType::Info("Install plugins declared in Cspm.lock file".to_string()),
+            LogMessageType::Info("Install plugins declared in Cspm.lock file".to_string()),
             Some("BUILD"),
             true
         );
@@ -1039,7 +1000,7 @@ pub fn build_from_lock(global: bool) -> Result<()> {
     }
 
     log_message(
-        MessageType::Info("Environment perfectly restored!".to_string()),
+        LogMessageType::Info("Environment perfectly restored!".to_string()),
         Some("BUILD"),
         true
     );
@@ -1050,7 +1011,7 @@ pub fn build_from_lock(global: bool) -> Result<()> {
 pub fn reinstall_module(modules: Vec<String>, force: bool) -> Result<()> {
     for module in modules.iter() {
         log_message(
-            MessageType::Info(format!("Remove module {}", colored_name!(module))),
+            LogMessageType::Info(format!("Remove module {}", colored_name!(module))),
             Some("REINSTALL"),
             true
         );
@@ -1058,7 +1019,7 @@ pub fn reinstall_module(modules: Vec<String>, force: bool) -> Result<()> {
         remove_package(&module, force)?;
 
         log_message(
-            MessageType::Info(format!("Reinstall module {}", colored_name!(module))),
+            LogMessageType::Info(format!("Reinstall module {}", colored_name!(module))),
             Some("REINSTALL"),
             true
         );
@@ -1075,7 +1036,7 @@ pub fn run_project(csoptions: &Vec<String>) -> Result<()> {
 
     if !cmd_exists!("csound") {
         let mes_err = log_message(
-            MessageType::Error(
+            LogMessageType::Error(
                 "Csound executable not found. Please install csound from <https://github.com/csound/csound/releases>".to_string()
             ),
             Some("RUN"),
@@ -1093,13 +1054,13 @@ pub fn run_project(csoptions: &Vec<String>) -> Result<()> {
     let entry_point: (String, String) = manifest.main.get_entry_point()?;
 
     if &manifest.package.mode == "cs-module" {
-        let mes_err = log_message(MessageType::Error("Csound document declared as [cs-module] in Cspm.toml file. Nothing to run".to_string()), Some("RUN"), false);
+        let mes_err = log_message(LogMessageType::Error("Csound document declared as [cs-module] in Cspm.toml file. Nothing to run".to_string()), Some("RUN"), false);
         return Err(anyhow::anyhow!(mes_err))
     }
 
     // check deps
     log_message(
-        MessageType::Info("Check dependencies status".to_string()),
+        LogMessageType::Info("Check dependencies status".to_string()),
         Some("RUN"),
         true
     );
@@ -1107,14 +1068,14 @@ pub fn run_project(csoptions: &Vec<String>) -> Result<()> {
     manifest.check_manifest_deps(&pths.modules_registry)?;
 
     log_message(
-        MessageType::Info("Project is in a healthy state".to_string()),
+        LogMessageType::Info("Project is in a healthy state".to_string()),
         Some("RUN"),
         true
     );
 
     // run csound
     log_message(
-        MessageType::Info("Running csound script".to_string()),
+        LogMessageType::Info("Running csound script".to_string()),
         Some("RUN"),
         true
     );
@@ -1159,7 +1120,7 @@ pub fn install_plugins(rstoptions: &Vec<String>) -> Result<()> {
                 if manifest_path.exists() && manifest_path.is_file() {
 
                     log_message(
-                        MessageType::Info("Update Cspm.toml".to_string()),
+                        LogMessageType::Info("Update Cspm.toml".to_string()),
                         Some("RISSET"),
                         true
                     );
@@ -1170,7 +1131,7 @@ pub fn install_plugins(rstoptions: &Vec<String>) -> Result<()> {
 
                     // load lockfile
                     log_message(
-                        MessageType::Info("Update Cspm.lock".to_string()),
+                        LogMessageType::Info("Update Cspm.lock".to_string()),
                         Some("RISSET"),
                         true
                     );
@@ -1185,7 +1146,7 @@ pub fn install_plugins(rstoptions: &Vec<String>) -> Result<()> {
                     lockfile.plugins.retain(|plug| !to_remove.contains(plug));
 
                     log_message(
-                        MessageType::Info("Write Cspm.toml".to_string()),
+                        LogMessageType::Info("Write Cspm.toml".to_string()),
                         Some("RISSET"),
                         true
                     );
@@ -1193,7 +1154,7 @@ pub fn install_plugins(rstoptions: &Vec<String>) -> Result<()> {
                     Manifest::write_toml(&manifest_path, &mtoml)?;
 
                     log_message(
-                        MessageType::Info("Write Cspm.lock".to_string()),
+                        LogMessageType::Info("Write Cspm.lock".to_string()),
                         Some("RISSET"),
                         true
                     );
@@ -1214,7 +1175,7 @@ pub fn publish_module() -> Result<()> {
 
     if !pths.manifest_file.exists() {
         let mes_err = log_message(
-            MessageType::Error(
+            LogMessageType::Error(
                 "Cspm.toml not found. Are you in a valid cspm Csound project?".to_string()
             ),
             Some("PUBLISH"),
@@ -1236,27 +1197,29 @@ pub fn publish_module() -> Result<()> {
     if !mtoml.check_module_mode() { warnings += 1; }
 
     if !pths.lock_file.exists() {
-        log_message(MessageType::Warning("Cspm.lock file not found".to_string()), Some("PUBLISH"), true);
+        log_message(LogMessageType::Warning("Cspm.lock file not found".to_string()), Some("PUBLISH"), true);
         warnings += 1;
     }
 
     if !mtoml.mandatory_fields_exists() { errors += 1; }
 
-    log_message(MessageType::Info("Check version format".to_string()), Some("PUBLISH"), true);
+    log_message(LogMessageType::Info("Check version format".to_string()), Some("PUBLISH"), true);
     Version::parse(&version)?;
 
     log_message(
-        MessageType::Info(format!("Check for remote registry conflicts for {}", colored_name_version!(name, version))),
+        LogMessageType::Info(format!("Check for remote registry conflicts for {}", colored_name_version!(name, version))),
         Some("PUBLISH"),
         true
     );
 
-    let remote_mindex: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index(REMOTE_MREGISTRY_INDEX)?;
-    if let Some(entry) = remote_mindex.get(name) {
+    let remote_mregistry = RemoteRegistry::new(REMOTE_MREGISTRY_INDEX, REMOTE_MREGISTRY);
+    let remote_pregistry = RemoteRegistry::new(REMOTE_PREGISTRY_INDEX, REMOTE_PREGISTRY);
+
+    if let Ok(entry) = remote_mregistry.fetch_and_get(name) {
         if entry.authors != *authors {
             if entry.versions.contains(&version) {
                 log_message(
-                    MessageType::Error("Module with same name but different authors already exists in registry. Please change the name of the module".to_string()),
+                    LogMessageType::Error("Module with same name but different authors already exists in registry. Please change the name of the module".to_string()),
                     Some("PUBLISH"),
                     true
                 );
@@ -1267,7 +1230,7 @@ pub fn publish_module() -> Result<()> {
 
         if entry.versions.contains(&version) {
             log_message(
-                MessageType::Warning(format!("Version {} already exists. This will be an update", colored_version!(version))),
+                LogMessageType::Warning(format!("Version {} already exists. This will be an update", colored_version!(version))),
                 Some("PUBLISH"),
                 true
             );
@@ -1276,12 +1239,11 @@ pub fn publish_module() -> Result<()> {
         }
     }
 
-    let remote_pindex: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index(REMOTE_PREGISTRY_INDEX)?;
-    if let Some(entry) = remote_pindex.get(name) {
+    if let Ok(entry) = remote_pregistry.fetch_and_get(name) {
         if entry.authors != *authors {
             if entry.versions.contains(&version) {
                 log_message(
-                    MessageType::Error("Project with same name but different authors already exists in registry. Please change the name of the project".to_string()),
+                    LogMessageType::Error("Project with same name but different authors already exists in registry. Please change the name of the project".to_string()),
                     Some("PUBLISH"),
                     true
                 );
@@ -1297,7 +1259,7 @@ pub fn publish_module() -> Result<()> {
     let warnings_string = format!("{} WARNINGS", warnings);
     let errors_string = format!("{} ERRORS", errors);
     log_message(
-        MessageType::Info(
+        LogMessageType::Info(
             format!("Check terminated with: {} and {}", warnings_string.yellow().bold(), errors_string.red().bold())
         ),
         Some("PUBLISH"),
@@ -1306,7 +1268,7 @@ pub fn publish_module() -> Result<()> {
 
     if errors >= 1 {
         log_message(
-            MessageType::Info("Please fix the errors and check again".to_string()),
+            LogMessageType::Info("Please fix the errors and check again".to_string()),
             Some("PUBLISH"),
             true
         );
@@ -1315,7 +1277,7 @@ pub fn publish_module() -> Result<()> {
     }
 
     log_message(
-        MessageType::Info("Done. To publish your module or project:".to_string()),
+        LogMessageType::Info("Done. To publish your module or project:".to_string()),
         Some("PUBLISH"),
         true
     );
@@ -1334,7 +1296,7 @@ pub fn validate_project() -> Result<()> {
     let mut roots = ProjectRoots::new(true)?;
 
     log_message(
-        MessageType::Info("Check modules folder".to_string()),
+        LogMessageType::Info("Check modules folder".to_string()),
         Some("VALIDATE"),
         true
     );
@@ -1342,7 +1304,7 @@ pub fn validate_project() -> Result<()> {
     let mut empty_mfolder = false;
     if let Err(_) = roots.set_modules_root(None) {
         log_message(
-            MessageType::Warning("Modules folder not found".to_string()),
+            LogMessageType::Warning("Modules folder not found".to_string()),
             Some("VALIDATE"),
             true
         );
@@ -1353,25 +1315,25 @@ pub fn validate_project() -> Result<()> {
     if !empty_mfolder {
         if !pths.modules_folder.exists() || !pths.modules_folder.is_dir() {
             log_message(
-                MessageType::Warning("Empty modules folder".to_string()),
+                LogMessageType::Warning("Empty modules folder".to_string()),
                 Some("VALIDATE"),
                 true
             );
         }
 
         log_message(
-            MessageType::Info("Check registry index".to_string()),
+            LogMessageType::Info("Check registry index".to_string()),
             Some("VALIDATE"),
             true
         );
 
     }
 
-    let mut mindex = Registry::new(&pths.modules_registry, RegistryMode::ModulesMode);
+    let mut mindex = LocalRegistry::new(&pths.modules_registry, RegistryMode::ModulesMode);
     mindex.read_internal_registry()?;
 
     log_message(
-        MessageType::Info("Check Cspm.toml file".to_string()),
+        LogMessageType::Info("Check Cspm.toml file".to_string()),
         Some("VALIDATE"),
         true
     );
@@ -1380,7 +1342,7 @@ pub fn validate_project() -> Result<()> {
         Ok(mnf) => mnf,
         Err(e) => {
             let mes_err = log_message(
-                MessageType::Error(format!("Cspm.toml file not found:\n{}", e)),
+                LogMessageType::Error(format!("Cspm.toml file not found:\n{}", e)),
                 Some("VALIDATE"),
                 false
             );
@@ -1402,7 +1364,7 @@ pub fn validate_project() -> Result<()> {
                     if let Some(version) = data.get(dep) {
                         if version != ver {
                             log_message(
-                                MessageType::Warning(
+                                LogMessageType::Warning(
                                     format!(
                                         "Module {}: declared version {} not found. Found version {}",
                                         colored_name!(dep), colored_version!(ver), colored_version!(version)
@@ -1416,7 +1378,7 @@ pub fn validate_project() -> Result<()> {
                         }
                     } else {
                         log_message(
-                            MessageType::Warning(format!("Module {} not found", colored_name_version!(dep, ver))),
+                            LogMessageType::Warning(format!("Module {} not found", colored_name_version!(dep, ver))),
                             Some("VALIDATE"),
                             true
                         );
@@ -1426,7 +1388,7 @@ pub fn validate_project() -> Result<()> {
                 }
                 RegistryData::CacheRegistry(_) => {
                     let mes_err = log_message(
-                        MessageType::Error("registry index corrupted".to_string()),
+                        LogMessageType::Error("registry index corrupted".to_string()),
                         Some("VALIDATE"),
                         false
                     );
@@ -1441,7 +1403,7 @@ pub fn validate_project() -> Result<()> {
     if !mtoml.dependencies.is_empty() {
         if fix || mindex.registry.is_none() {
             log_message(
-                MessageType::Info("Repair project dependencies".to_string()),
+                LogMessageType::Info("Repair project dependencies".to_string()),
                 Some("VALIDATE"),
                 true
             );
@@ -1451,7 +1413,7 @@ pub fn validate_project() -> Result<()> {
             let pinfo = ProjectInfo::open_toml(&pths.project_info_file)?;
 
             log_message(
-                MessageType::Info("Rebuild project".to_string()),
+                LogMessageType::Info("Rebuild project".to_string()),
                 Some("VALIDATE"),
                 true
             );
@@ -1460,7 +1422,7 @@ pub fn validate_project() -> Result<()> {
         }
     } else {
         log_message(
-            MessageType::Info("No dependencies to check".to_string()),
+            LogMessageType::Info("No dependencies to check".to_string()),
             Some("VALIDATE"),
             true
         );
@@ -1468,7 +1430,7 @@ pub fn validate_project() -> Result<()> {
 
     if !pths.gitignore_file.exists() {
         log_message(
-            MessageType::Warning(
+            LogMessageType::Warning(
                 ".gitignore file not found. Creating...".to_string()
             ),
             Some("VALIDATE"),
@@ -1489,7 +1451,7 @@ pub fn validate_project() -> Result<()> {
 
         if !has_csmod && pths.modules_folder.exists() {
             log_message(
-                MessageType::Warning(
+                LogMessageType::Warning(
                     "The cs_modules directory exists in this project. Adding it to .gitignore".to_string()
                 ),
                 Some("VALIDATE"),
@@ -1506,7 +1468,7 @@ pub fn validate_project() -> Result<()> {
 
         if !has_prj && pths.project_info_file.exists() {
             log_message(
-                MessageType::Error(
+                LogMessageType::Error(
                     "The .config.toml file exists in this project but not in .gitignore. Adding it to .gitignore".to_string()
                 ),
                 Some("VALIDATE"),
@@ -1523,7 +1485,7 @@ pub fn validate_project() -> Result<()> {
     }
 
     log_message(
-        MessageType::Info("The project is in healthy status".to_string()),
+        LogMessageType::Info("The project is in healthy status".to_string()),
         Some("VALIDATE"),
         true
     );
@@ -1532,22 +1494,12 @@ pub fn validate_project() -> Result<()> {
 }
 
 pub fn take_project(project: &str) -> Result<()> {
-    log_message(MessageType::Info("Check remote registry index".to_string()), Some("TAKE"), true);
-    let remote_registry = fetch_remote_registry_index(REMOTE_PREGISTRY_INDEX)?;
-    if !remote_registry.contains_key(project) {
-        let mes_err = log_message(
-            MessageType::Error(format!("Project {} does not exists in remote registry", colored_name!(project))),
-            Some("TAKE"),
-            true
-        );
-        return Err(anyhow::anyhow!(mes_err))
-    }
-
-    log_message(MessageType::Info(format!("Download {} project", colored_name!(project))), Some("TAKE"), true);
-    let project_url = format!("{}/{}", REMOTE_PREGISTRY, project);
-
-    download_from_remote_registry(&project_url, path::Path::new(project))?;
-    log_message(MessageType::Info("Project is now available. Build and join!".to_string()), Some("TAKE"), true);
+    log_message(LogMessageType::Info("Check remote registry index".to_string()), Some("TAKE"), true);
+    let remote_registry = RemoteRegistry::new(REMOTE_PREGISTRY_INDEX, REMOTE_PREGISTRY);
+    remote_registry.fetch_and_get(project)?;
+    log_message(LogMessageType::Info(format!("Download {} project", colored_name!(project))), Some("TAKE"), true);
+    remote_registry.download_from_main_source(path::Path::new(project).to_path_buf())?;
+    log_message(LogMessageType::Info("Project is now available. Build and join!".to_string()), Some("TAKE"), true);
 
     Ok(())
 }

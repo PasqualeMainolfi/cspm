@@ -96,6 +96,16 @@ pub enum CsCommands {
 
     },
 
+    /// Reinstall module (globally)
+    Refresh {
+        module: Vec<String>,
+
+        /// force resolve dependencies
+        #[arg(short = 'f', long = "force")]
+        force: bool
+
+    },
+
     /// Manage cspm cache
     Cache {
 

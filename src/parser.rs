@@ -3,7 +3,7 @@ use serde::{ Deserialize, Serialize };
 use sha2::{ Sha256, Digest };
 use walkdir::WalkDir;
 use colored::*;
-use crate::confres::REMOTE_MREGISTRY_INDEX;
+use crate::confres::{ MANIFEST_FILE, ProjectRootMode, REMOTE_MREGISTRY, REMOTE_MREGISTRY_INDEX, get_root };
 use std::{ collections::{ HashMap, HashSet }, fs, path };
 use crate::{
     colored_name,
@@ -13,9 +13,8 @@ use crate::{
 };
 
 use crate::utils::{
-    MessageType,
+    LogMessageType,
     log_message,
-    fetch_remote_registry_index,
     check_csound_installed
 };
 
@@ -125,7 +124,7 @@ impl MainEntry {
     pub fn get_entry_point(&self) -> Result<(String, String)> {
         if self.is_empty() {
             let mes_err = log_message(
-                MessageType::Error(
+                LogMessageType::Error(
                     "Main entry point is empty. Please specify the script entry point (.csd or .osc/.sco)".to_string()
                 ),
                 None,
@@ -136,23 +135,23 @@ impl MainEntry {
         }
 
         if self.udo.is_some() {
-            log_message(MessageType::Warning("Provided .udo as entry point. Nothing to run".to_string()), Some("RUN"), true);
+            log_message(LogMessageType::Warning("Provided .udo as entry point. Nothing to run".to_string()), Some("RUN"), true);
             return Ok(("".to_string(), "".to_string()))
         }
 
         if self.csd.is_some() && self.orc.is_some() && self.sco.is_some() {
-            let mes_err = log_message(MessageType::Error("Many entry point specified".to_string()), Some("RUN"), false);
+            let mes_err = log_message(LogMessageType::Error("Many entry point specified".to_string()), Some("RUN"), false);
             return Err(anyhow::anyhow!(mes_err))
         }
 
         if self.csd.is_none() && (self.orc.is_none() || self.sco.is_none()) {
-            let mes_err = log_message(MessageType::Error("Missing .csd or .orc/.sco entry point".to_string()), Some("RUN"), false);
+            let mes_err = log_message(LogMessageType::Error("Missing .csd or .orc/.sco entry point".to_string()), Some("RUN"), false);
             return Err(anyhow::anyhow!(mes_err))
         }
 
         if self.csd.is_some() && (self.sco.is_some() || self.orc.is_some()) {
             log_message(
-                MessageType::Warning(
+                LogMessageType::Warning(
                     "Run .csd entry point. Specified .sco or .osc script will be ignored".to_string()
                 ),
                 Some("RUN"),
@@ -167,7 +166,7 @@ impl MainEntry {
             let entry_point_sco = self.sco.clone().unwrap_or(String::new());
 
             log_message(
-                MessageType::Info(format!("Run {} and {} entry point", entry_point_orc, entry_point_sco)),
+                LogMessageType::Info(format!("Run {} and {} entry point", entry_point_orc, entry_point_sco)),
                 Some("RUN"),
                 true
             );
@@ -179,7 +178,7 @@ impl MainEntry {
             let entry_point_csd = self.csd.clone().unwrap_or(String::new());
 
             log_message(
-                MessageType::Info(format!("Run {} entry point", entry_point_csd)),
+                LogMessageType::Info(format!("Run {} entry point", entry_point_csd)),
                 Some("RUN"),
                 true
             );
@@ -188,7 +187,7 @@ impl MainEntry {
         }
 
         let mes_err = log_message(
-            MessageType::Error("Failed to run csound script".to_string()),
+            LogMessageType::Error("Failed to run csound script".to_string()),
             Some("RUN"),
             false
         );
@@ -214,7 +213,7 @@ pub struct Manifest {
 
 impl Manifest {
     pub fn check_manifest_deps(&self, modules_folder: &path::Path) -> Result<()> {
-        let mut registry = Registry::new(modules_folder, RegistryMode::ModulesMode);
+        let mut registry = LocalRegistry::new(modules_folder, RegistryMode::ModulesMode);
         registry.read_internal_registry()?;
         if let Some(rdata) = registry.registry {
             match rdata {
@@ -224,7 +223,7 @@ impl Manifest {
                             if v != rvers {
 
                                 let mes_err = log_message(
-                                    MessageType::Error(
+                                    LogMessageType::Error(
                                         format!(
                                             "The module {} declared in the Cspm.toml has a different version {} than the one installed {}",
                                             colored_name!(d),
@@ -241,7 +240,7 @@ impl Manifest {
                         } else {
 
                             let mes_err = log_message(
-                                MessageType::Error(
+                                LogMessageType::Error(
                                     format!(
                                         "The module {} declared in the Cspm.toml is not installed",
                                         colored_name_version!(d, v)
@@ -260,7 +259,7 @@ impl Manifest {
         } else {
 
             let mes_err = log_message(
-                MessageType::Error("Failed to read internal registry index".to_string()),
+                LogMessageType::Error("Failed to read internal registry index".to_string()),
                 Some("RESOLVE-DEPS"),
                 false
             );
@@ -274,7 +273,7 @@ impl Manifest {
     pub fn mandatory_fields_exists(&self) -> bool {
         if self.package.name.is_empty() ||self.package.version.is_empty() ||self.package.authors.is_empty() ||self.package.mode.is_empty() {
             log_message(
-                MessageType::Error(
+                LogMessageType::Error(
                     "Name, version and authors of the module or project must be specified in Cspm.toml file".to_string()
                 ),
                 None,
@@ -289,7 +288,7 @@ impl Manifest {
         let spath = proot.join(&self.main.src);
         if !spath.exists() {
             log_message(
-                MessageType::Warning(format!("Source folder {} not found", self.main.src.bold())),
+                LogMessageType::Warning(format!("Source folder {} not found", self.main.src.bold())),
                 None,
                 true
             );
@@ -306,7 +305,7 @@ impl Manifest {
             let pfile = proot.join(extra_file);
             if !pfile.exists() && pfile == spath {
                 log_message(
-                    MessageType::Error(
+                    LogMessageType::Error(
                         format!(
                             "Included {} file in Cspm.toml not found", (pfile.to_string_lossy().to_string()).bold())
                     ),
@@ -325,19 +324,19 @@ impl Manifest {
         match self.package.mode.as_str() {
             "cs-module" => {
                 if self.main.udo.is_none() {
-                    log_message(MessageType::Warning("Declared as cs-module, but entry point .udo not found".to_string()), Some("VALIDATE"), true);
+                    log_message(LogMessageType::Warning("Declared as cs-module, but entry point .udo not found".to_string()), Some("VALIDATE"), true);
                     return false;
                 }
             },
             "cs-project" => {
                 if self.main.csd.is_none() || (self.main.orc.is_none() && self.main.sco.is_none()) {
-                    log_message(MessageType::Warning("Declared as cs-project, but entry point .csd or orc/sco not found".to_string()), Some("VALIDATE"), true);
+                    log_message(LogMessageType::Warning("Declared as cs-project, but entry point .csd or orc/sco not found".to_string()), Some("VALIDATE"), true);
                     return false
                 }
             }
             _ => {
                 if self.main.csd.is_none() || (self.main.orc.is_none() && self.main.sco.is_none()) {
-                    log_message(MessageType::Warning("Document mode in Cspm.toml file must be 'cs-module' or 'cs-project'".to_string()), Some("VALIDATE"), true);
+                    log_message(LogMessageType::Warning("Document mode in Cspm.toml file must be 'cs-module' or 'cs-project'".to_string()), Some("VALIDATE"), true);
                     return false
                 }
             }
@@ -352,7 +351,7 @@ impl Manifest {
             Some(v) => {
                 if v != self.package.cs_version {
                     log_message(
-                        MessageType::Warning(
+                        LogMessageType::Warning(
                             format!(
                                 "Declared Csound version {} in Cspm.toml file and the one detected {} are different",
                                 colored_version!(self.package.cs_version),
@@ -367,7 +366,7 @@ impl Manifest {
             },
             None => {
                 log_message(
-                    MessageType::Warning(
+                    LogMessageType::Warning(
                         "Csound version not found".to_string()
                     ),
                     Some("BUILD"),
@@ -378,6 +377,25 @@ impl Manifest {
         }
 
         true
+    }
+
+    pub fn update_from_file(&mut self) -> Result<()> {
+        let mpath = get_root(false, &ProjectRootMode::ProjectRoot, false)?.join(MANIFEST_FILE);
+        let manifest = Manifest::open_toml(&mpath)?;
+
+        self.package = manifest.package;
+        self.main = manifest.main;
+        self.dependencies = manifest.dependencies;
+        self.plugins = manifest.plugins;
+
+        Ok(())
+    }
+
+    pub fn add_dependency(&mut self, pname: &str, pversion: &str) {
+        self.dependencies
+            .entry(pname.to_string())
+            .and_modify(|v| *v = pversion.to_string())
+            .or_insert(pversion.to_string());
     }
 
 }
@@ -426,7 +444,7 @@ pub enum RegistryData {
     ModulesRegistry(HashMap<String, String>)
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RemoteRegistryIndex {
     #[serde(default)]
     pub versions: Vec<String>,
@@ -438,13 +456,114 @@ pub struct RemoteRegistryIndex {
     pub description: String
 }
 
-pub struct Registry {
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct RemoteRegistry {
+    pub index_url: String,
+    pub resources_url: String,
+}
+
+impl RemoteRegistry {
+    pub fn new(index_url: &str, resources_url: &str) -> Self {
+        Self { index_url: index_url.to_string(), resources_url: resources_url.to_string() }
+    }
+
+    pub fn fetch_and_get(&self, key: &str) -> Result<RemoteRegistryIndex> {
+        let client = reqwest::blocking::Client::new();
+        let response = client
+           .get(&self.index_url)
+           .header("User-Agent", "cspm")
+           .send()?
+           .error_for_status()?;
+
+        let rjson: HashMap<String, RemoteRegistryIndex> = response.json()?;
+        match rjson.get(key) {
+            Some(pkg) => {
+                return Ok(pkg.clone())
+            },
+            None => {
+                let mes_err = log_message(
+                    LogMessageType::Error(format!("{} does not exists in remote registry", colored_name!(key))),
+                    None,
+                    true
+                );
+                return Err(anyhow::anyhow!(mes_err))
+            }
+        }
+    }
+
+    fn download_from_helper(url: &str, dest: &path::Path) -> Result<()> {
+        let client = reqwest::blocking::Client::new();
+        let response: Vec<GitHubItem> = client
+           .get(url)
+           .header("User-Agent", "cspm")
+           .send()?
+           .error_for_status()?
+           .json()?;
+
+        fs::create_dir_all(dest)?;
+
+        for item in response {
+            let item_destination = dest.join(item.name.clone());
+            match item.r#type.as_str() {
+                "file" => {
+                    if let Some(down_url) = item.download_url {
+                        let bytes_response = client
+                            .get(down_url)
+                            .header("User-Agent", "cspm")
+                            .send()?
+                            .error_for_status()?
+                            .bytes()?;
+
+                        fs::write(item_destination, &bytes_response)?;
+                    }
+                },
+                "dir" => {
+                    let sub_url = format!("{}/{}", url, item.name);
+                    RemoteRegistry::download_from_helper(&sub_url, &item_destination)?;
+                }
+                _ => continue
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn download_from_main_source(&self, dest: path::PathBuf) -> Result<()> {
+        RemoteRegistry::download_from_helper(&self.resources_url, &dest)
+    }
+
+    pub fn download_package(&self, name: &str, version: &str, cache_path: &path::Path, dest: &path::Path) -> Result<()> {
+        let remote_module_url = format!("{}/{}/{}", self.resources_url, name, version);
+
+        log_message(
+            LogMessageType::Info(format!("Download module {} from {}", colored_name!(name), self.resources_url)),
+            Some("DOWNLOAD"),
+            true
+        );
+
+        let destination = cache_path.join(dest);
+        if let Err(e) = RemoteRegistry::download_from_helper(&remote_module_url, &destination) {
+            let mes_err = log_message(
+                LogMessageType::Error(format!("Failed to download module:\n{}", e)),
+                Some("DOWNLOAD"),
+                false
+            );
+
+            return Err(anyhow::anyhow!(mes_err))
+        }
+
+        Ok(())
+    }
+}
+
+
+pub struct LocalRegistry {
     pub registry: Option<RegistryData>,
     rpath: path::PathBuf,
     rmode: RegistryMode,
 }
 
-impl Registry {
+impl LocalRegistry {
     pub fn new(path_to_registry: &path::Path, rmode: RegistryMode) -> Self {
         Self {
             registry: None,
@@ -493,7 +612,7 @@ impl Registry {
             return Ok(())
         }
 
-        let mes_err = log_message(MessageType::Error("Failed to write registry index".to_string()), None, false);
+        let mes_err = log_message(LogMessageType::Error("Failed to write registry index".to_string()), None, false);
         Err(anyhow::anyhow!(mes_err))
     }
 
@@ -566,6 +685,42 @@ impl Registry {
         }
         HashSet::new()
     }
+
+    pub fn check_version_conflicts(&self, pname: &str, pversion: &str) -> Result<()> {
+        if let Some(ref reg) = self.registry {
+            match reg {
+                RegistryData::ModulesRegistry(map) => {
+                    if let Some(v) = map.get(pname) {
+                        if v != pversion {
+
+                            let err_mes = log_message(
+                                LogMessageType::Error(
+                                    format!(
+                                        "Dependency conflict: {} requested but {} is already installed",
+                                        colored_name_version!(pname, pversion),
+                                        colored_name_version!(pname, v)
+                                    )
+                                ),
+                                None,
+                                false
+                            );
+
+                            return Err(anyhow::anyhow!(err_mes))
+                        }
+                    }
+                },
+                RegistryData::CacheRegistry(_) => { }
+            }
+        } else {
+            let err_mes = log_message(
+                LogMessageType::Error("Failed to read registry index".to_string()), None, false
+            );
+
+            return Err(anyhow::anyhow!(err_mes))
+        }
+
+        Ok(())
+    }
 }
 
 pub struct ModuleTools { }
@@ -597,21 +752,22 @@ impl ModuleTools {
     pub fn resolve_module_version(pname: &str, version: Option<String>) -> Result<String> {
 
         log_message(
-            MessageType::Info("Check for last available version".to_string()),
+            LogMessageType::Info("Check for last available version".to_string()),
             Some("RESOLVE-DEPS"),
             true
         );
 
-        let indexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index(REMOTE_MREGISTRY_INDEX)?;
+        let remote_registry = RemoteRegistry::new(REMOTE_MREGISTRY_INDEX, REMOTE_MREGISTRY);
+        // let indexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index(REMOTE_MREGISTRY_INDEX)?;
 
-        if let Some(index) = indexes.get(pname) {
+        if let Ok(index) = remote_registry.fetch_and_get(pname) {
             let versions = &index.versions;
             if let Some(passed_version) = version {
                 if versions.contains(&passed_version) {
                     return Ok(passed_version.to_string())
                 } else {
                     let mes_err = log_message(
-                        MessageType::Error(
+                        LogMessageType::Error(
                             format!("Version {} for module {} does not exists", colored_name!(pname), colored_version!(passed_version))
                         ),
                         Some("RESOLVE-DEPS"),
@@ -627,8 +783,31 @@ impl ModuleTools {
             }
         }
 
+        // if let Some(index) = remote_registry.registry.get(pname) {
+        //     let versions = &index.versions;
+        //     if let Some(passed_version) = version {
+        //         if versions.contains(&passed_version) {
+        //             return Ok(passed_version.to_string())
+        //         } else {
+        //             let mes_err = log_message(
+        //                 LogMessageType::Error(
+        //                     format!("Version {} for module {} does not exists", colored_name!(pname), colored_version!(passed_version))
+        //                 ),
+        //                 Some("RESOLVE-DEPS"),
+        //                 false
+        //             );
+
+        //             return Err(anyhow::anyhow!(mes_err))
+        //         }
+        //     } else {
+        //         if let Some(latest) = versions.last() {
+        //             return Ok(latest.clone())
+        //         }
+        //     }
+        // }
+
         let mes_err = log_message(
-            MessageType::Error(
+            LogMessageType::Error(
                 format!("Module {} not found in remote registry", colored_name!(pname))
             ),
             Some("RESOLVE-DEPS"),
@@ -673,7 +852,7 @@ impl Version {
             },
             Err(_) => {
                 let mes_err = log_message(
-                    MessageType::Error(
+                    LogMessageType::Error(
                         "Invalid version. Version must be in numeric format [major.minor.patch]. Semantic version is not allowed".to_string()
                     ),
                     None,

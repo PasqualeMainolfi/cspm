@@ -1,23 +1,20 @@
 use anyhow::Result;
 use serde_json::Value;
 use colored::*;
-use std::{ collections::{ HashSet, HashMap }, fs };
+use std::{ collections::HashSet, fs };
 use crate::{
-    build_dir,
-    colored_name,
-    colored_name_version,
-    colored_version,
-    pkg_full_name
+    build_dir, colored_name, colored_name_version, colored_version, confres::REMOTE_PREGISTRY, pkg_full_name
 };
 
 use crate::{
     prj_core::{ remove_helper, resolve_dependencies },
-    utils::{ MessageType, fetch_remote_registry_index, log_message },
+    utils::{ LogMessageType, log_message },
     confres::{
         ProjectPaths,
         ProjectRoots,
         CSPM_MANIFEST,
         MANIFEST_FILE,
+        REMOTE_MREGISTRY,
         REMOTE_MREGISTRY_INDEX,
         REMOTE_PREGISTRY_INDEX
     },
@@ -25,11 +22,11 @@ use crate::{
         ManageToml,
         Manifest,
         ModuleTools,
-        Registry,
+        LocalRegistry,
         RegistryMode,
-        RemoteRegistryIndex,
         Version,
-        VersionStatus
+        VersionStatus,
+        RemoteRegistry
     }
 };
 
@@ -40,57 +37,39 @@ pub fn get_cspm_version() -> Result<String> {
 }
 
 pub fn search_package(module_name: &str) -> Result<()> {
-    log_message(MessageType::Info(format!("Search module: {}", colored_name!(module_name))), Some("SEARCH"), true);
+    log_message(LogMessageType::Info(format!("Search module: {}", colored_name!(module_name))), Some("SEARCH"), true);
 
-    let mindexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index(REMOTE_MREGISTRY_INDEX)?;
-    let pindexes: HashMap<String, RemoteRegistryIndex> = fetch_remote_registry_index(REMOTE_PREGISTRY_INDEX)?;
+    let remote_mregistry = RemoteRegistry::new(REMOTE_MREGISTRY_INDEX, REMOTE_MREGISTRY);
+    let remote_pregistry = RemoteRegistry::new(REMOTE_PREGISTRY_INDEX, REMOTE_PREGISTRY);
 
     log_message(
-        MessageType::Info("Look at modules registry...".to_string()),
+        LogMessageType::Info("Look at modules registry...".to_string()),
         Some("SEARCH"),
         true
     );
 
-    match mindexes.get(module_name) {
-        Some(pkg) => {
-            println!();
-            println!("📦 {}", colored_name!(module_name));
-            println!("  ├─ Versions: {}", pkg.versions.join(", "));
-            println!("  ├─ Authors: {}", pkg.authors.join(", "));
-            println!("  └─ Description: {}", pkg.description);
-            println!();
-        },
-        None => {
-            log_message(
-                MessageType::Warning(format!("No module named {} was found", colored_name!(module_name))),
-                Some("SEARCH"),
-                true
-            );
-        }
+    if let Ok(mpkg) = remote_mregistry.fetch_and_get(module_name) {
+        println!();
+        println!("📦 {}", colored_name!(module_name));
+        println!("  ├─ Versions: {}", mpkg.versions.join(", "));
+        println!("  ├─ Authors: {}", mpkg.authors.join(", "));
+        println!("  └─ Description: {}", mpkg.description);
+        println!();
     }
 
     log_message(
-        MessageType::Info("Look at projects registry...".to_string()),
+        LogMessageType::Info("Look at projects registry...".to_string()),
         Some("SEARCH"),
         true
     );
 
-    match pindexes.get(module_name) {
-        Some(pkg) => {
-            println!();
-            println!("📁 {}", colored_name!(module_name));
-            println!("  ├─ Versions: {}", pkg.versions.join(", "));
-            println!("  ├─ Authors: {}", pkg.authors.join(", "));
-            println!("  └─ Description: {}", pkg.description);
-            println!();
-        },
-        None => {
-            log_message(
-                MessageType::Warning(format!("No project named {} was found", colored_name!(module_name))),
-                Some("SEARCH"),
-                true
-            );
-        }
+    if let Ok(ppkg) = remote_pregistry.fetch_and_get(module_name) {
+        println!();
+        println!("📁 {}", colored_name!(module_name));
+        println!("  ├─ Versions: {}", ppkg.versions.join(", "));
+        println!("  ├─ Authors: {}", ppkg.authors.join(", "));
+        println!("  └─ Description: {}", ppkg.description);
+        println!();
     }
 
     Ok(())
@@ -101,12 +80,12 @@ pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
     let pths = ProjectPaths::new(&roots);
 
     if !pths.cache_folder.exists() || !pths.cache_folder.is_dir() {
-        log_message(MessageType::Info("Cache is empty. Nothing to do".to_string()), Some("CACHE"), true);
+        log_message(LogMessageType::Info("Cache is empty. Nothing to do".to_string()), Some("CACHE"), true);
         return Ok(())
     }
 
     if clean {
-        let mut cache_registry = Registry::new(&pths.cache_registry, RegistryMode::CacheMode);
+        let mut cache_registry = LocalRegistry::new(&pths.cache_registry, RegistryMode::CacheMode);
         cache_registry.read_internal_registry()?;
         for entry in fs::read_dir(pths.cache_folder)? {
             let entry = entry?;
@@ -115,13 +94,13 @@ pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
             let pkg_path = entry.path();
             let pkg_name = entry.file_name().to_string_lossy().to_string();
 
-            log_message(MessageType::Info(format!("Remove module {} from cache", colored_name!(pkg_name))), Some("CACHE"), true);
+            log_message(LogMessageType::Info(format!("Remove module {} from cache", colored_name!(pkg_name))), Some("CACHE"), true);
             fs::remove_dir_all(&pkg_path)?;
 
             cache_registry.remove_entry_from_registry(pkg_name.clone());
         }
 
-        log_message(MessageType::Info("Update cache registry".to_string()), Some("CACHE"), true);
+        log_message(LogMessageType::Info("Update cache registry".to_string()), Some("CACHE"), true);
         cache_registry.write_internal_registry()?;
 
         return Ok(())
@@ -129,7 +108,7 @@ pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
 
     // cache list
     if list {
-        log_message(MessageType::Info("Cache status".to_string()), Some("CACHE"), true);
+        log_message(LogMessageType::Info("Cache status".to_string()), Some("CACHE"), true);
         for entry in fs::read_dir(pths.cache_folder)? {
             let entry = entry?;
             let entry_path = entry.path();
@@ -138,7 +117,11 @@ pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
                 let pname = entry_manifest.package.name;
                 let pversion = entry_manifest.package.version;
                 let pdeps = entry_manifest.dependencies;
-                let deps_format: String = pdeps.iter().map(|(d, v)| colored_name_version!(d, v)).collect::<Vec<String>>().join(", ");
+                let deps_format: String = pdeps
+                    .iter()
+                    .map(|(d, v)| colored_name_version!(d, v))
+                    .collect::<Vec<String>>()
+                    .join(", ");
 
                 println!();
                 println!("🗂️  {}", colored_name_version!(pname, pversion));
@@ -152,7 +135,7 @@ pub fn manage_cache(clean: bool, list: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn install_globally(module: String, force: bool) -> Result<()> {
+pub fn install_globally(module: &str, force: bool) -> Result<()> {
     let mut roots = ProjectRoots::new(false)?;
     roots.set_modules_root(Some(true))?;
     let pths = ProjectPaths::new(&roots);
@@ -160,7 +143,7 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
     build_dir!(&pths.cache_folder);
     build_dir!(&pths.modules_folder);
 
-    let mut module_registry = Registry::new(&pths.modules_registry, RegistryMode::ModulesMode);
+    let mut module_registry = LocalRegistry::new(&pths.modules_registry, RegistryMode::ModulesMode);
     module_registry.read_internal_registry()?;
 
     let (name, version) = ModuleTools::parse_module_name(&module);
@@ -175,16 +158,16 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
         match parsed_internal_version.compare(&parsed_mversion) {
             VersionStatus::Old | VersionStatus::Young => {
                 log_message(
-                    MessageType::Info(format!("Remove module {} previously added", colored_name_version!(name, mversion))),
+                    LogMessageType::Info(format!("Remove module {} previously added", colored_name_version!(name, mversion))),
                     Some("INSTALL"),
                     true
                 );
 
-                uninstall_globally(name.clone(), force)?;
+                uninstall_globally(&name, force)?;
             },
             VersionStatus::Same => {
                 log_message(
-                    MessageType::Info(format!("Module {} already installed", colored_name_version!(name, mversion))),
+                    LogMessageType::Info(format!("Module {} already installed", colored_name_version!(name, mversion))),
                     Some("INSTALL"),
                     true
                 );
@@ -195,7 +178,7 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
     }
 
     log_message(
-        MessageType::Info("Check and resolve dependencies...".to_string()),
+        LogMessageType::Info("Check and resolve dependencies...".to_string()),
         Some("INSTALL"),
         true
     );
@@ -203,8 +186,10 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
     // read updated registry
     module_registry.read_internal_registry()?;
 
-    let mut cache_registry = Registry::new(&pths.cache_registry, RegistryMode::CacheMode);
+    let mut cache_registry = LocalRegistry::new(&pths.cache_registry, RegistryMode::CacheMode);
     cache_registry.read_internal_registry()?;
+
+    let remote_registry = RemoteRegistry::new(REMOTE_MREGISTRY_INDEX, REMOTE_MREGISTRY);
 
     let mut visited = HashSet::new();
     resolve_dependencies(
@@ -215,11 +200,12 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
         &mut visited,
         &mut module_registry,
         &mut cache_registry,
+        &remote_registry,
         None
     )?;
 
     log_message(
-        MessageType::Info("Write registry index".to_string()),
+        LogMessageType::Info("Write registry index".to_string()),
         Some("INSTALL"),
         true
     );
@@ -230,12 +216,12 @@ pub fn install_globally(module: String, force: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn uninstall_globally(module: String, force: bool) -> Result<()> {
+pub fn uninstall_globally(module: &str, force: bool) -> Result<()> {
     let mut roots = ProjectRoots::new(false)?;
     roots.set_modules_root(Some(true))?;
     let pths = ProjectPaths::new(&roots);
 
-    let mut mregistry = Registry::new(&pths.modules_registry, RegistryMode::ModulesMode);
+    let mut mregistry = LocalRegistry::new(&pths.modules_registry, RegistryMode::ModulesMode);
     mregistry.read_internal_registry()?;
 
     let (name, mut version) = ModuleTools::parse_module_name(&module);
@@ -244,7 +230,7 @@ pub fn uninstall_globally(module: String, force: bool) -> Result<()> {
             Some(v) => version = v,
             None => {
                 let mes_err = log_message(
-                    MessageType::Error("Failed to read the registry. Specify the version <name@version>".to_string()),
+                    LogMessageType::Error("Failed to read the registry. Specify the version <name@version>".to_string()),
                     Some("UNINSTALL"),
                     false
                 );
@@ -255,13 +241,13 @@ pub fn uninstall_globally(module: String, force: bool) -> Result<()> {
     }
 
     log_message(
-        MessageType::Info(format!("Remove module {} from cs_modules folder", colored_name!(name))),
+        LogMessageType::Info(format!("Remove module {} from cs_modules folder", colored_name!(name))),
         Some("UNINSTALL"),
         true
     );
 
     log_message(
-        MessageType::Info(format!("Remove module {} dependencies", colored_name!(name))),
+        LogMessageType::Info(format!("Remove module {} dependencies", colored_name!(name))),
         Some("UNINSTALL"),
         true
     );
@@ -272,7 +258,7 @@ pub fn uninstall_globally(module: String, force: bool) -> Result<()> {
 
     // update registry index
     log_message(
-        MessageType::Info("Write registry index".to_string()),
+        LogMessageType::Info("Write registry index".to_string()),
         Some("UNINSTALL"),
         true
     );
@@ -287,7 +273,7 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
     roots.set_modules_root(Some(true))?;
     let pths = ProjectPaths::new(&roots);
 
-    let mut mregistry = Registry::new(&pths.modules_registry, RegistryMode::ModulesMode);
+    let mut mregistry = LocalRegistry::new(&pths.modules_registry, RegistryMode::ModulesMode);
     mregistry.read_internal_registry()?;
 
     let mut to_update: HashSet<String> = HashSet::new();
@@ -299,7 +285,7 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
                 match parsed_registry_version.compare(&Version::parse(&latest_version)?) {
                     VersionStatus::Young => {
                         log_message(
-                            MessageType::Info(format!("Module {} is up to date", colored_name!(module))),
+                            LogMessageType::Info(format!("Module {} is up to date", colored_name!(module))),
                             Some("UPGRADE"),
                             true
                         );
@@ -310,7 +296,7 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
                     },
                     VersionStatus::Same => {
                         log_message(
-                            MessageType::Info(format!("Module {} already exists", colored_name!(module))),
+                            LogMessageType::Info(format!("Module {} already exists", colored_name!(module))),
                             Some("UPGRADE"),
                             true
                         );
@@ -319,7 +305,7 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
                 }
             } else {
                 log_message(
-                    MessageType::Warning(format!("Module {} does not exists in registry", colored_name!(module))),
+                    LogMessageType::Warning(format!("Module {} does not exists in registry", colored_name!(module))),
                     Some("UPGRADE"),
                     true
                 );
@@ -332,7 +318,7 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
 
     for entry in to_update.iter() {
         log_message(
-            MessageType::Info(format!("Check latest version for module {}", colored_name!(entry))),
+            LogMessageType::Info(format!("Check latest version for module {}", colored_name!(entry))),
             Some("UPGRADE"),
             true
         );
@@ -340,20 +326,42 @@ pub fn upgrade_globally(modules: Option<Vec<String>>, force: bool) -> Result<()>
         let (pkg_name, pkg_version) = ModuleTools::parse_module_name(&entry);
 
         log_message(
-            MessageType::Info(format!("Remove module {}", colored_name!(pkg_name))),
+            LogMessageType::Info(format!("Remove module {}", colored_name!(pkg_name))),
             Some("UPGRADE"),
             true
         );
 
-        uninstall_globally(entry.clone(), force)?;
+        uninstall_globally(&entry, force)?;
 
         log_message(
-            MessageType::Info(format!("Update module {} to {}", colored_name!(pkg_name), colored_version!(pkg_version))),
+            LogMessageType::Info(format!("Update module {} to {}", colored_name!(pkg_name), colored_version!(pkg_version))),
             Some("UPGRADE"),
             true
         );
 
-        install_globally(entry.clone(), force)?;
+        install_globally(&entry, force)?;
+    }
+
+    Ok(())
+}
+
+pub fn refresh_globally(modules: Vec<String>, force: bool) -> Result<()> {
+    for module in modules.iter() {
+        log_message(
+            LogMessageType::Info(format!("Remove module {}", colored_name!(module))),
+            Some("REINSTALL"),
+            true
+        );
+
+        uninstall_globally(&module, force)?;
+
+        log_message(
+            LogMessageType::Info(format!("Refresh module {}", colored_name!(module))),
+            Some("REINSTALL"),
+            true
+        );
+
+        install_globally(&module, force)?;
     }
 
     Ok(())
