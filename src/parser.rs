@@ -783,29 +783,6 @@ impl ModuleTools {
             }
         }
 
-        // if let Some(index) = remote_registry.registry.get(pname) {
-        //     let versions = &index.versions;
-        //     if let Some(passed_version) = version {
-        //         if versions.contains(&passed_version) {
-        //             return Ok(passed_version.to_string())
-        //         } else {
-        //             let mes_err = log_message(
-        //                 LogMessageType::Error(
-        //                     format!("Version {} for module {} does not exists", colored_name!(pname), colored_version!(passed_version))
-        //                 ),
-        //                 Some("RESOLVE-DEPS"),
-        //                 false
-        //             );
-
-        //             return Err(anyhow::anyhow!(mes_err))
-        //         }
-        //     } else {
-        //         if let Some(latest) = versions.last() {
-        //             return Ok(latest.clone())
-        //         }
-        //     }
-        // }
-
         let mes_err = log_message(
             LogMessageType::Error(
                 format!("Module {} not found in remote registry", colored_name!(pname))
