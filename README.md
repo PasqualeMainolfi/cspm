@@ -100,8 +100,7 @@ csd = "src/main.csd" # entry point
 ## Command reference
 
 ```text
-Hello, from cspm!
-A modern package manager for Csound
+[cspm]: a modern package manager for Csound
 
 Usage: cspm <COMMAND>
 
@@ -114,6 +113,7 @@ Commands:
   reinstall               Reinstall dependencies to the project
   remove                  Remove dependencies from the project
   update                  Update the project dependencies
+  refresh                 Reinstall module (globally)
   cache                   Manage cspm cache
   sync                    Check the project environment status
   build                   Build project from manifest or lock file
