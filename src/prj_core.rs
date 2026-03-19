@@ -3,11 +3,11 @@ use serde_json;
 use colored::*;
 use fs_extra::dir::{ copy, CopyOptions };
 use std::{
-    path,
-    process,
+    process::Command,
+    path::Path,
     io::Write,
-    { fs, fs::OpenOptions },
     collections::{ HashSet, VecDeque },
+    { fs, fs::OpenOptions },
 };
 
 use crate::{
@@ -16,37 +16,27 @@ use crate::{
     colored_name,
     colored_name_version,
     colored_version,
-    pkg_full_name
-};
-
-use crate::{
-    utils::{
-        LogMessageType,
+    pkg_full_name,
+    lock::{ LockFile, LockChild },
+    manifest::{ Manifest, MainEntry, MainPackage },
+    external_tools::{
         check_risset,
-        log_message,
         run_csound_script,
         check_csound_installed,
         run_risset,
         check_gitignore
     },
-    parser::{
+    registry::{
         CacheMeta,
-        LockChild,
-        LockFile,
-        MainEntry,
-        MainPackage,
-        ManageToml,
-        Manifest,
         RegistryData,
         RegistryMode,
         VersionStatus,
         Version,
         LocalRegistry,
-        ProjectInfo,
         ModuleTools,
         RemoteRegistry
     },
-    confres::{
+    common::{
         CSD_MAIN_TEMPLATE,
         UDO_MAIN_TEMPLATE,
         LOCK_FILE,
@@ -61,6 +51,10 @@ use crate::{
         ProjectRoots,
         ProjectRootMode,
         ProjectPaths,
+        LogMessageType,
+        ProjectInfo,
+        ManageToml,
+        log_message,
         get_root,
         create_info_file,
         create_gitignore_file
@@ -72,7 +66,7 @@ pub fn create_project(p_name: String, module_flag: bool, global: bool) -> Result
     let mut dir_builder = fs::DirBuilder::new();
     dir_builder.recursive(true);
     let pfolder = format!("./{}", p_name);
-    let p = path::Path::new(pfolder.as_str());
+    let p = Path::new(pfolder.as_str());
 
     // create src folder
     let p_src = p.join(DEFAULT_SRC_FOLDER);
@@ -238,8 +232,8 @@ pub fn add_package(name: &str, version: Option<String>, force: bool) -> Result<(
 
 
 pub fn resolve_dependencies(
-    cfolder: &path::Path,
-    mfolder: &path::Path,
+    cfolder: &Path,
+    mfolder: &Path,
     mname: &str,
     version: &str,
     visited: &mut HashSet<String>,
@@ -457,7 +451,7 @@ pub fn remove_package(pname: &str, force: bool) -> Result<()> {
 }
 
 pub fn remove_helper(
-    cs_modules_path: &path::Path,
+    cs_modules_path: &Path,
     pname: &str,
     force: bool,
     mindex: &mut LocalRegistry,
@@ -1498,7 +1492,7 @@ pub fn take_project(project: &str) -> Result<()> {
     let remote_registry = RemoteRegistry::new(REMOTE_PREGISTRY_INDEX, REMOTE_PREGISTRY);
     remote_registry.fetch_and_get(project)?;
     log_message(LogMessageType::Info(format!("Download {} project", colored_name!(project))), Some("TAKE"), true);
-    remote_registry.download_from_main_source(path::Path::new(project).to_path_buf())?;
+    remote_registry.download_from_main_source(Path::new(project).to_path_buf())?;
     log_message(LogMessageType::Info("Project is now available. Build and join!".to_string()), Some("TAKE"), true);
 
     Ok(())

@@ -1,10 +1,8 @@
+use colored::*;
 use directories::ProjectDirs;
 use anyhow::Result;
-use std::{ fs, path };
-use crate::{
-    parser::{ ProjectInfo, ManageToml },
-    utils::{ LogMessageType, log_message }
-};
+use std::{ fs, path::{ Path, PathBuf } };
+use serde::{ Deserialize, Serialize };
 
 
 pub const CSPM_MANIFEST: &str = include_str!("../Cargo.toml");
@@ -33,6 +31,72 @@ pub const DEFAULT_SRC_FOLDER: &str = "src";
 
 pub const PROJECT_INFO_FILE: &str = ".config.toml";
 
+
+pub enum LogMessageType {
+    Info(String),
+    Warning(String),
+    Error(String)
+}
+
+pub fn log_message(mtype: LogMessageType, context: Option<&str>, display: bool) -> String {
+    let cont = match context {
+        Some(c) => format!("::{}", c),
+        None => "".to_string()
+    };
+
+    let m = match mtype {
+        LogMessageType::Info(m) => {
+            let mtype = format!("[INFO{}]", cont);
+            format!("{} {}", mtype.white().bold(), m)
+        }
+        LogMessageType::Warning(m) => {
+            let mtype = format!("[WARNING{}]", cont);
+            format!("{} {}", mtype.yellow().bold(), m)
+        }
+        LogMessageType::Error(m) => {
+            let mtype = format!("[ERROR{}]", cont);
+            format!("{} {}", mtype.red().bold(), m)
+        }
+    };
+
+    if display { println!("{}", m); }
+    return m;
+}
+
+pub trait ManageToml {
+    fn open_toml(mpath: &Path) -> Result<Self>
+    where Self: Sized;
+    fn write_toml(mpath: &Path, mtoml: &Self) -> Result<()>;
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct GitHubItem {
+    pub name: String,
+    pub r#type: String,
+    pub download_url: Option<String>
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ProjectInfo {
+    pub version: u32,
+    pub global_modules: bool
+}
+
+impl ManageToml for ProjectInfo {
+    fn open_toml(pinfo_path: &Path) -> Result<Self>
+    where Self: Sized {
+        let pinfo = fs::read_to_string(pinfo_path)?;
+        let ptoml: ProjectInfo = toml::from_str(&pinfo)?;
+        Ok(ptoml)
+    }
+
+    fn write_toml(pinfo_path: &Path, ptoml: &Self) -> Result<()> {
+        let ptoml= toml::to_string_pretty::<ProjectInfo>(&ptoml)?;
+        std::fs::write(pinfo_path, ptoml)?;
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub enum ProjectRootMode {
     CacheRoot,
@@ -40,7 +104,7 @@ pub enum ProjectRootMode {
     ProjectRoot
 }
 
-pub fn get_root(global: bool, mode: &ProjectRootMode, display: bool) -> Result<path::PathBuf> {
+pub fn get_root(global: bool, mode: &ProjectRootMode, display: bool) -> Result<PathBuf> {
     match global {
         true => {
             let mes_err = log_message(LogMessageType::Error("Cannot determine home directory".to_string()), None, false);
@@ -83,9 +147,9 @@ pub fn get_root(global: bool, mode: &ProjectRootMode, display: bool) -> Result<p
 }
 
 pub struct ProjectRoots {
-    pub project_root: path::PathBuf,
-    pub modules_root: path::PathBuf,
-    pub cache_root: path::PathBuf,
+    pub project_root: PathBuf,
+    pub modules_root: PathBuf,
+    pub cache_root: PathBuf,
     display: bool
 }
 
@@ -95,7 +159,7 @@ impl ProjectRoots {
         let cache_root = get_root(true, &ProjectRootMode::CacheRoot, display)?;
         Ok(Self {
             project_root,
-            modules_root: path::PathBuf::new(),
+            modules_root: PathBuf::new(),
             cache_root,
             display
         })
@@ -113,14 +177,14 @@ impl ProjectRoots {
 }
 
 pub struct ProjectPaths {
-    pub manifest_file: path::PathBuf,
-    pub lock_file: path::PathBuf,
-    pub cache_folder: path::PathBuf,
-    pub cache_registry: path::PathBuf,
-    pub modules_folder: path::PathBuf,
-    pub modules_registry: path::PathBuf,
-    pub project_info_file: path::PathBuf,
-    pub gitignore_file: path::PathBuf
+    pub manifest_file: PathBuf,
+    pub lock_file: PathBuf,
+    pub cache_folder: PathBuf,
+    pub cache_registry: PathBuf,
+    pub modules_folder: PathBuf,
+    pub modules_registry: PathBuf,
+    pub project_info_file: PathBuf,
+    pub gitignore_file: PathBuf
 }
 
 impl ProjectPaths {
@@ -143,7 +207,7 @@ impl ProjectPaths {
     }
 }
 
-pub fn create_info_file(prj_root: &path::Path, global: bool) -> Result<()> {
+pub fn create_info_file(prj_root: &Path, global: bool) -> Result<()> {
     let prj_info_file = prj_root.join(PROJECT_INFO_FILE);
     if !prj_info_file.exists() { fs::File::create(&prj_info_file)?; }
     let prj_info = ProjectInfo { version: CONFIG_VERSION, global_modules: global };
@@ -152,7 +216,7 @@ pub fn create_info_file(prj_root: &path::Path, global: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn create_gitignore_file(prj_root: &path::Path) -> Result<()> {
+pub fn create_gitignore_file(prj_root: &Path) -> Result<()> {
     let gitignore_path = prj_root.join(".gitignore");
     if !gitignore_path.exists() { fs::File::create(&gitignore_path)?; }
     fs::write(&gitignore_path, GITIGNORE_TEMPLATE)?;

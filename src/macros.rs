@@ -22,7 +22,7 @@ macro_rules! colored_name_version {
 #[macro_export]
 macro_rules! cmd_exists {
     ($cmd:expr) => {
-        process::Command::new($cmd)
+        Command::new($cmd)
             .arg("--version")
             .output()
             .map(|out| out.status.success())

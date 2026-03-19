@@ -1,44 +1,11 @@
 use anyhow::Result;
-use colored::*;
 use regex::Regex;
-use std::{ fs, process, env };
-use crate::confres::ProjectPaths;
+use std::{ fs, process::Command, env::consts::OS };
+use crate::common::{ ProjectPaths, LogMessageType, log_message };
 use crate::cmd_exists;
 
-
-pub enum LogMessageType {
-    Info(String),
-    Warning(String),
-    Error(String)
-}
-
-pub fn log_message(mtype: LogMessageType, context: Option<&str>, display: bool) -> String {
-    let cont = match context {
-        Some(c) => format!("::{}", c),
-        None => "".to_string()
-    };
-
-    let m = match mtype {
-        LogMessageType::Info(m) => {
-            let mtype = format!("[INFO{}]", cont);
-            format!("{} {}", mtype.white().bold(), m)
-        }
-        LogMessageType::Warning(m) => {
-            let mtype = format!("[WARNING{}]", cont);
-            format!("{} {}", mtype.yellow().bold(), m)
-        }
-        LogMessageType::Error(m) => {
-            let mtype = format!("[ERROR{}]", cont);
-            format!("{} {}", mtype.red().bold(), m)
-        }
-    };
-
-    if display { println!("{}", m); }
-    return m;
-}
-
 pub fn get_csound_version() -> Option<String> {
-    let cmd = process::Command::new("csound").arg("--version").output().ok()?;
+    let cmd = Command::new("csound").arg("--version").output().ok()?;
     let stdout_string = String::from_utf8_lossy(&cmd.stdout);
     let stderr_string = String::from_utf8_lossy(&cmd.stderr);
     let vstring = format!("{}{}", stdout_string, stderr_string);
@@ -69,7 +36,7 @@ pub fn check_csound_installed() -> Option<String> {
 
 pub fn run_csound_script(entry_point: &(String, String), cs_options: &Vec<String>) -> Result<()> {
     let (file1, file2) = entry_point;
-    let mut c = process::Command::new("csound");
+    let mut c = Command::new("csound");
     c.arg(file1);
     if !file2.is_empty() { c.arg(file2); }
     if !cs_options.is_empty() {
@@ -99,17 +66,17 @@ pub fn check_risset() -> Result<()> {
         // check if uv is installed
         let uv_exists = cmd_exists!("uv");
         if !uv_exists {
-            match env::consts::OS {
+            match OS {
                 "linux" | "macos" => {
                     log_message(LogMessageType::Info("Install uv".to_string()), Some("RISSET"), true);
-                    process::Command::new("sh")
+                    Command::new("sh")
                         .arg("-c")
                         .arg("curl -LsSf https://astral.sh/uv/install.sh | sh")
                         .status()?;
                 },
                 "windows" => {
                     log_message(LogMessageType::Info("Install uv".to_string()), Some("RISSET"), true);
-                    process::Command::new("powershell")
+                    Command::new("powershell")
                         .args([
                             "-ExecutionPolicy",
                             "ByPass",
@@ -128,7 +95,7 @@ pub fn check_risset() -> Result<()> {
         log_message(LogMessageType::Info("Install risset".to_string()), Some("RISSET"), true);
 
         // install risset
-        process::Command::new("uv")
+        Command::new("uv")
             .args(["tool", "install", "risset"])
             .status()?;
 
@@ -139,7 +106,7 @@ pub fn check_risset() -> Result<()> {
 }
 
 pub fn run_risset(rst_options: &Vec<String>) -> Result<()> {
-    let mut c = process::Command::new("risset");
+    let mut c = Command::new("risset");
     if !rst_options.is_empty() {
         for flag in rst_options.iter() {
             c.arg(flag);

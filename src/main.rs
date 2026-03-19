@@ -1,15 +1,17 @@
 pub mod cli;
-pub mod parser;
-pub mod confres;
+pub mod common;
 pub mod glb_core;
 pub mod prj_core;
-pub mod utils;
+pub mod external_tools;
 pub mod macros;
+pub mod manifest;
+pub mod lock;
+pub mod registry;
 
 use clap::Parser;
 use cli::{ CsCli, CsCommands };
 use crate::{
-    utils::{ LogMessageType, log_message },
+    common::{ LogMessageType, log_message },
     glb_core::{
         get_cspm_version,
         search_package,

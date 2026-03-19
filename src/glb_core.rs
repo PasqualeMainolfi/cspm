@@ -2,31 +2,35 @@ use anyhow::Result;
 use serde_json::Value;
 use colored::*;
 use std::{ collections::HashSet, fs };
-use crate::{
-    build_dir, colored_name, colored_name_version, colored_version, confres::REMOTE_PREGISTRY, pkg_full_name
-};
 
 use crate::{
+    build_dir,
+    colored_name,
+    colored_name_version,
+    colored_version,
+    pkg_full_name,
     prj_core::{ remove_helper, resolve_dependencies },
-    utils::{ LogMessageType, log_message },
-    confres::{
+    manifest::Manifest,
+    common::{
         ProjectPaths,
         ProjectRoots,
+        LogMessageType,
+        ManageToml,
+        log_message,
         CSPM_MANIFEST,
         MANIFEST_FILE,
         REMOTE_MREGISTRY,
+        REMOTE_PREGISTRY,
         REMOTE_MREGISTRY_INDEX,
         REMOTE_PREGISTRY_INDEX
     },
-    parser::{
-        ManageToml,
-        Manifest,
-        ModuleTools,
-        LocalRegistry,
-        RegistryMode,
+    registry::{
         Version,
+        RemoteRegistry,
+        RegistryMode,
         VersionStatus,
-        RemoteRegistry
+        LocalRegistry,
+        ModuleTools
     }
 };
 
